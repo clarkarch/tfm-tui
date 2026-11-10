@@ -191,10 +191,43 @@ export class TrashStrandedError extends Error {
   }
 }
 
+// A trash move that LANDED but could not remove the SOURCE: the file is
+// complete in the trash root and its .trashinfo was KEPT (the entry is the
+// user's data and must stay restorable), but the original path still holds
+// leftovers. The error names the trash path — the user has to know where
+// their data is (and that the source is not fully gone).
+export class TrashPartialMoveError extends Error {
+  readonly trashPath: string;
+  readonly removalError: unknown;
+  constructor(trashPath: string, removalError: unknown) {
+    super(`source partially removed: ${fsErrText(removalError)} · ${trashPath}`);
+    this.name = "TrashPartialMoveError";
+    this.trashPath = trashPath;
+    this.removalError = removalError;
+  }
+}
+
+// A move that LANDED its destination but could not remove the SOURCE: the
+// destination holds the only complete copy, so the caller must keep it and
+// report the partial state (the message text is what
+// `isPrivilegeError` matches, so it stays "source partially removed: <text>").
+export class SourceRemovalFailedError extends Error {
+  readonly destPath: string;
+  readonly removalError: unknown;
+  constructor(destPath: string, removalError: unknown) {
+    super(`source partially removed: ${fsErrText(removalError)}`);
+    this.name = "SourceRemovalFailedError";
+    this.destPath = destPath;
+    this.removalError = removalError;
+  }
+}
+
 export const fsErrText = (err: unknown): string => {
   // a stranded trash file names its path — the whole message IS the report
   // (the generic branch would cut it at the first colon)
   if (err instanceof TrashStrandedError) return err.message;
+  // a partial move names the trash path AND the reason — same rule
+  if (err instanceof TrashPartialMoveError) return err.message;
   const code = errCode(err);
   if (typeof code === "string") return FS_ERR_TEXT[code] ?? code.toLowerCase();
   return err instanceof Error ? (err.message.split(":")[0]?.toLowerCase() ?? "unknown error") : "unknown error";
@@ -316,7 +349,7 @@ export const fsMove = async (src: string, dest: string, copy?: CrossDeviceCopy):
     } catch (err) {
       // partial source deletion; the complete copy in dest is the only intact
       // data now — keep it and say what actually happened instead of a bare errno
-      throw new Error(`source partially removed: ${fsErrText(err)}`);
+      throw new SourceRemovalFailedError(dest, err);
     }
   }
 };
@@ -461,9 +494,33 @@ const trashRootsFor = (target: string): string[] => {
 // Then the file moves, then the placeholder is overwritten with the real
 // Path=/DeletionDate=. If the move fails the placeholder is removed (no
 // orphan entry); if the final info write fails the move rolls back.
-// A full move (the source is GONE afterwards) — the seam the trash op uses
-// so a cross-device trash can go through the progress-aware copy engine.
-export type MoveFn = (src: string, dest: string) => Promise<void>;
+//
+// The move seam is what the trash op plugs its progress-aware copy into, so
+// a cross-device trash can cross the boundary with a bar and a cancel.
+//
+// What a trash move reports back.
+//
+// A move can land the file in the trash root and STILL fail to remove the
+// source (a cross-device copy whose source removal failed). The entry is
+// then the user's ONLY complete copy, so its .trashinfo MUST be kept (an
+// entry without one cannot be restored) and the caller must say "source
+// partially removed" with the trash path.
+//
+// ONE tagged value, one owner — the same shape the copy/move loop uses
+// (TransferOutcome): "moved" = the move is done; "landed" = the file is in
+// the trash root, but the SOURCE could not be removed.
+export type TrashMoveOutcome = { kind: "moved" } | { kind: "landed"; sourceRemovalFailed: unknown };
+
+export type MoveFn = (src: string, dest: string) => Promise<TrashMoveOutcome>;
+
+// The default move seam: a plain rename (same device) or fsMove's EXDEV
+// fallback. It either lands the file or throws — it never reports a partial
+// move (fsMove's own fallback reports "source partially removed" as an
+// error, and the caller keeps the copy).
+const defaultTrashMove: MoveFn = async (src, dest) => {
+  await fsMove(src, dest);
+  return { kind: "moved" };
+};
 
 // The XDG trash move's ONE explicit phase. The claim → move → finalize
 // sequence fails in three different ways, and each failure has a DIFFERENT
@@ -473,11 +530,16 @@ export type MoveFn = (src: string, dest: string) => Promise<void>;
 //   claimed    — the .trashinfo placeholder owns the name, the file is
 //                STILL at the source (a failure here only cleans up the
 //                placeholder; the source is intact)
+//   landed     — the file IS in the trash root, but the SOURCE removal
+//                failed (a cross-device copy whose rm(src) did not finish).
+//                The entry is the user's only complete copy: the .trashinfo
+//                must be KEPT and the caller must report the partial state.
 //   moved      — the file is in the trash root, the info is still the
 //                placeholder (a failure here must roll the file back)
 //   finalized  — the file is in the trash root and its info is durable
 type TrashPhase =
   | { kind: "claimed"; infoPath: string; trashPath: string }
+  | { kind: "landed"; infoPath: string; trashPath: string }
   | { kind: "moved"; infoPath: string; trashPath: string }
   | { kind: "finalized"; infoPath: string; trashPath: string };
 
@@ -488,6 +550,19 @@ const dropTrashInfo = async (infoPath: string, what: string): Promise<void> => {
     await rm(infoPath, { force: true });
   } catch (cleanupErr) {
     swallow(what, cleanupErr);
+  }
+};
+
+// make the .trashinfo durable (best effort): the claim already wrote the
+// real content, so this only re-writes + fsyncs it. Never throws — the
+// caller is reporting a partial move, and the report must not be replaced
+// by a cleanup error.
+const finalizeTrashInfo = async (infoPath: string, content: string): Promise<void> => {
+  try {
+    await writeFile(infoPath, content);
+    await fsyncPath(infoPath);
+  } catch (err) {
+    swallow("trash info finalize", err);
   }
 };
 
@@ -510,6 +585,10 @@ export const xdgTrashMove = async (
       // would fail with ENOENT and MASK the real error — the user would
       // never learn where their file is.
       if (err instanceof TrashStrandedError) throw err;
+      // A LANDED file (the copy landed, the source removal failed) is the
+      // same: the file is in THIS root's files dir — the next root would
+      // fail with ENOENT and mask the real error.
+      if (err instanceof TrashPartialMoveError) throw err;
       // a cancelled op must NOT fall through to the next trash root: the
       // fallback would start the whole copy again against the user's ✕
       if (opts?.isCancelled?.()) break;
@@ -524,7 +603,7 @@ export const xdgTrashMoveToRoot = async (
   root: string,
   // injectable move (default fsMove): the sudo replace-stash runs the SAME
   // claim/rename/finalize loop with sudo-mv — one loop, not a near-clone.
-  move: (src: string, dest: string) => Promise<void> = fsMove,
+  move: MoveFn = defaultTrashMove,
 ): Promise<string> => {
   const filesDir = path.join(root, "files");
   const infoDir = path.join(root, "info");
@@ -562,7 +641,16 @@ export const xdgTrashMoveToRoot = async (
     // --- phase: claimed (the info placeholder owns the name) ---
     let phase: TrashPhase = { kind: "claimed", infoPath, trashPath: finalPath };
     try {
-      await move(absSrc, finalPath);
+      const outcome = await move(absSrc, finalPath);
+      if (outcome.kind === "landed") {
+        // --- phase: landed (the file IS in the trash root; only the SOURCE
+        // removal failed) — the entry is the user's only complete copy, so
+        // its .trashinfo MUST be KEPT (an entry without one cannot be
+        // restored). Report the partial state with the trash path.
+        phase = { kind: "landed", infoPath, trashPath: finalPath };
+        await finalizeTrashInfo(infoPath, content);
+        throw new TrashPartialMoveError(finalPath, outcome.sourceRemovalFailed);
+      }
       // --- phase: moved (the file is in the trash root) ---
       phase = { kind: "moved", infoPath, trashPath: finalPath };
       await writeFile(infoPath, content);
@@ -575,6 +663,23 @@ export const xdgTrashMoveToRoot = async (
       }
     } catch (err) {
       // THE PHASE PICKS THE REMEDY:
+      if (phase.kind === "claimed" && err instanceof SourceRemovalFailedError) {
+        // The move seam LANDED the file and then failed to remove the source
+        // (fsMove's EXDEV fallback throws exactly that). The file IS in the
+        // trash root — so this is the LANDED phase, not a "never moved"
+        // failure: the .trashinfo must be KEPT (an entry without one cannot
+        // be restored) and the report must name the trash path.
+        phase = { kind: "landed", infoPath, trashPath: finalPath };
+        await finalizeTrashInfo(infoPath, content);
+        throw new TrashPartialMoveError(finalPath, err.removalError);
+      }
+      if (phase.kind === "landed") {
+        // the file is in the trash root and its info was kept — the only
+        // failure is the source removal, and the report must say so (with
+        // the path). Nothing to clean up: dropping the info here would make
+        // the entry unrestorable.
+        throw err instanceof TrashPartialMoveError ? err : new TrashPartialMoveError(phase.trashPath, err);
+      }
       if (phase.kind === "claimed") {
         // the file never moved — the source is intact, so only the
         // placeholder needs cleanup (no orphan entry)

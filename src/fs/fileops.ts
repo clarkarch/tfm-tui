@@ -32,6 +32,7 @@ import {
   xdgTrashMoveToRoot,
   xdgTrashMove,
   crossDevice as fsCrossDevice,
+  type TrashMoveOutcome,
 } from "./fsutil";
 import {
   mayRemoveTarget,
@@ -536,7 +537,14 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
       }
     }
   };
-  const sudoMove = (src: string, target: string): Promise<void> => runSudoTool(sudoExec, sudoMvArgv(src, target));
+  // the sudo-mv seam reports the trash-move OUTCOME: a sudo-mv that lands
+  // the file but cannot remove the source is a partial move (the entry is
+  // restorable, the source still holds leftovers) — the trash loop names the
+  // trash path for it
+  const sudoMove = async (src: string, target: string): Promise<TrashMoveOutcome> => {
+    await runSudoTool(sudoExec, sudoMvArgv(src, target));
+    return { kind: "moved" };
+  };
   const sudoRemove = (target: string): Promise<void> => runSudoTool(sudoExec, sudoRmArgv(target));
   // sudo replace-stash: the normal stashVictim runs unprivileged BEFORE any
   // sudo retry, so a privileged victim would abort the op as "Replace failed"

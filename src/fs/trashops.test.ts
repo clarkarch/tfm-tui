@@ -299,6 +299,45 @@ describe("cross-device trash / restore progress", () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  test("a failed source removal keeps the trash entry restorable", async () => {
+    // The copy landed; only the SOURCE removal failed. The file in the trash
+    // is then the user's ONLY complete copy — so its .trashinfo MUST be kept
+    // (an entry without one cannot be restored) and the report must name the
+    // trash path instead of claiming a plain FAILED (the file IS in the
+    // trash; a bare "FAILED" hides where the data went).
+    const root = sandbox();
+    try {
+      const file = path.join(root, "usb.bin");
+      writeFileSync(file, "x".repeat(1024));
+      const sink = recordingSink();
+      const p = progressFake();
+      const ops = makeTrashOps({
+        ...sink,
+        trashProgress: p.dp,
+        crossDevice: () => true,
+        removeTree: async () => {
+          throw new Error("permission denied");
+        },
+      });
+      await ops.trashPaths([file]);
+      // the copy landed ...
+      const hit = path.join(trashDir(), "files", "usb.bin");
+      expect(existsSync(hit)).toBe(true);
+      // ... and its info was KEPT, so the entry still maps back to the
+      // original path (that mapping IS what "restorable" means here)
+      expect(existsSync(path.join(trashDir(), "info", "usb.bin.trashinfo"))).toBe(true);
+      expect(await trashOrigPathForFile(hit)).toBe(file);
+      // the report says what actually happened and names the trash path
+      expect(sink.notes.some((n) => n.includes("source partially removed") && n.includes(hit))).toBe(true);
+      // and it is NOT reported as a clean success
+      expect(sink.notes.some((n) => n.includes("notify:trash:success:"))).toBe(false);
+      // the entry is undoable — the undo unit restores it
+      expect(sink.batches.length).toBe(1);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("restoreFromTrash", () => {

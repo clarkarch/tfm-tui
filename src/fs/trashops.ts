@@ -13,9 +13,11 @@ import {
   trashDir,
   trashIfSameFile,
   trashInfoPathForTrashFile,
+  TrashPartialMoveError,
   xdgTrashMove,
   safeRestoreMove,
   type CrossDeviceCopy,
+  type TrashMoveOutcome,
 } from "./fsutil";
 import { defaultSudoExec, isPrivilegeError, runSudoTool, sudoRmArgv } from "./elevate";
 import { copyTreeProgress, rmTreeProgress, scanTree } from "./transfer";
@@ -53,6 +55,12 @@ export type TrashOpsSink = {
    * (the trash destination does not exist yet — it is created by the move).
    */
   crossDevice?(a: string, b: string): boolean;
+  /**
+   * the source removal after a cross-device trash copy landed — tests inject
+   * a failure to pin the "the copy landed, the source did not go" state (the
+   * same seam fileops' ctx carries).
+   */
+  removeTree?(p: string): Promise<void>;
   /** leveled toast notification (the status bar is selection info only) */
   notify(msg: string, title?: string, level?: NotifyLevel): void;
   /** schedule a grid refresh */
@@ -152,12 +160,21 @@ export const makeTrashOps = (sink: TrashOpsSink) => {
   // no cancel, minutes of silence. Route it through the transfer engine
   // instead: the SAME progress toast the deletes use, with the same cancel.
   const isCrossDevice = (a: string, b: string): boolean => (sink.crossDevice ?? crossDeviceTo)(a, b);
+  // the source removal after the copy landed (tests inject a failure)
+  const removeTree = sink.removeTree ?? ((p: string) => rm(p, { recursive: true, force: true }));
 
   // full move for the trash: same-device → an instant rename; cross-device →
   // the progress-aware copy, and the source goes only AFTER the copy landed.
-  const trashMove = async (src: string, dest: string): Promise<void> => {
+  // The seam reports the OUTCOME: "landed" means the copy is complete in the
+  // trash root but the SOURCE removal failed — the entry is then the user's
+  // only complete copy, so its .trashinfo must be KEPT and the op must say
+  // "source partially removed" with the trash path.
+  const trashMove = async (src: string, dest: string): Promise<TrashMoveOutcome> => {
     const dp = sink.trashProgress;
-    if (!dp || !isCrossDevice(src, dest)) return fsMove(src, dest);
+    if (!dp || !isCrossDevice(src, dest)) {
+      await fsMove(src, dest);
+      return { kind: "moved" };
+    }
     // the pre-scan has no honest total yet — count in the open so a big tree
     // never looks dead
     const scan = await scanTree(src, (f) => dp.counting?.(f));
@@ -171,8 +188,16 @@ export const makeTrashOps = (sink: TrashOpsSink) => {
       throw err;
     }
     // the copy landed — now drop the source (the move's mirror)
-    await rm(src, { recursive: true, force: true });
+    try {
+      await removeTree(src);
+    } catch (err) {
+      dp.finish("✗ Trash failed");
+      // the copy is complete in the trash root: report the partial move
+      // instead of dropping the entry (its info must survive)
+      return { kind: "landed", sourceRemovalFailed: err };
+    }
     dp.finish("✓ Trashed");
+    return { kind: "moved" };
   };
 
   // copy-only seam for safeRestoreMove (it removes the source itself):
@@ -215,6 +240,39 @@ export const makeTrashOps = (sink: TrashOpsSink) => {
       let ok = 0;
       let cancelled = false;
       const failWhy = new Set<string>();
+      // entries that landed in the trash but whose SOURCE could not be
+      // removed — the entry is restorable (its .trashinfo was kept), but the
+      // source still holds leftovers, so the report must say so and name the
+      // trash path.
+      const partial: string[] = [];
+      // the undo/journal/redo units for ONE trashed entry (the same shape for
+      // a clean trash and for a partial one — the entry is in the trash
+      // either way, so it is undoable either way)
+      const pushTrashEntry = (loc: string, orig: string): void => {
+        const hit = path.basename(loc);
+        const from = path.join(path.dirname(loc), hit);
+        units.push(async () => {
+          // undo of a trash = move the file back to where it came from. A
+          // trashed file from another device lives in the HOME trash, so
+          // this restore crosses the boundary — that copy gets the bar too
+          // (the plain `cp` fallback showed nothing for minutes).
+          await safeRestoreMove(from, orig, {
+            copy: restoreCopy("restoring"),
+            crossDevice: isCrossDevice(from, orig),
+          });
+          await rmTrashInfoForPath(from, sink.log?.bind(sink));
+        });
+        dUnits.push({ op: "restore-move", from, to: orig });
+        dUnits.push({ op: "rm-trashinfo", name: hit, path: from });
+        redos.push(async () => {
+          try {
+            if (existsSync(orig)) await xdgTrashMove(orig);
+          } catch (err) {
+            sink.log?.(`redo trash ${orig}: ${fsErrText(err)}`);
+          }
+        });
+        dRedos.push({ op: "trash-if-exists", path: orig });
+      };
       for (const p of paths) {
         // always trash via our own xdg path: we control the final name, so the
         // undo unit pairs deterministically (a before/after listing diff could
@@ -225,29 +283,7 @@ export const makeTrashOps = (sink: TrashOpsSink) => {
             // a cancelled copy must not fall through to the next trash root
             isCancelled: () => sink.trashProgress?.cancelled() === true,
           });
-          const hit = path.basename(loc);
-          const from = path.join(path.dirname(loc), hit);
-          units.push(async () => {
-            // undo of a trash = move the file back to where it came from. A
-            // trashed file from another device lives in the HOME trash, so
-            // this restore crosses the boundary — that copy gets the bar too
-            // (the plain `cp` fallback showed nothing for minutes).
-            await safeRestoreMove(from, p, {
-              copy: restoreCopy("restoring"),
-              crossDevice: isCrossDevice(from, p),
-            });
-            await rmTrashInfoForPath(from, sink.log?.bind(sink));
-          });
-          dUnits.push({ op: "restore-move", from, to: p });
-          dUnits.push({ op: "rm-trashinfo", name: hit, path: from });
-          redos.push(async () => {
-            try {
-              if (existsSync(p)) await xdgTrashMove(p);
-            } catch (err) {
-              sink.log?.(`redo trash ${p}: ${fsErrText(err)}`);
-            }
-          });
-          dRedos.push({ op: "trash-if-exists", path: p });
+          pushTrashEntry(loc, p);
           ok++;
         } catch (err) {
           // the toast's ✕ during a cross-device copy: the source survived and
@@ -256,6 +292,17 @@ export const makeTrashOps = (sink: TrashOpsSink) => {
             cancelled = true;
             break;
           }
+          if (err instanceof TrashPartialMoveError) {
+            // the copy LANDED: the file is complete in the trash root and its
+            // .trashinfo was kept (the entry is the user's only complete
+            // copy). Only the SOURCE removal failed — count the item as
+            // trashed, keep it undoable, and report the partial state with
+            // the trash path (a bare "FAILED" would hide where the data is).
+            partial.push(err.trashPath);
+            pushTrashEntry(err.trashPath, p);
+            ok++;
+            continue;
+          }
           failWhy.add(fsErrText(err));
         }
       }
@@ -263,16 +310,27 @@ export const makeTrashOps = (sink: TrashOpsSink) => {
         sink.pushUndoBatch(`trash ${ok} item${ok === 1 ? "" : "s"}`, units, redos, { units: dUnits, redos: dRedos });
       sink.renderAll();
       const failed = paths.length - ok;
+      // the partial tail names the trash path — the user has to know where
+      // their data is (the source is not fully gone)
+      const partialTail = partial.length
+        ? ` · source partially removed · ${partial[0]}${partial.length > 1 ? ` (+${partial.length - 1} more)` : ""}`
+        : "";
       // full success omits the total (it equals ok); partial failures read
       // "ok of N"
       const summary = cancelled
         ? `Trash cancelled · ${ok} of ${paths.length} moved`
         : failed
-          ? `Trashed ${ok} of ${paths.length} · ${failSuffix(failed, failWhy)}`
-          : `Trashed ${ok} item${ok === 1 ? "" : "s"}`;
-      sink.trashProgress?.finish(cancelled ? "✗ Trash cancelled" : failed ? "✗ Trash failed" : `✓ Trashed ${ok}`);
+          ? `Trashed ${ok} of ${paths.length} · ${failSuffix(failed, failWhy)}${partialTail}`
+          : `Trashed ${ok} item${ok === 1 ? "" : "s"}${partialTail}`;
+      sink.trashProgress?.finish(
+        cancelled ? "✗ Trash cancelled" : failed || partial.length ? "✗ Trash failed" : `✓ Trashed ${ok}`,
+      );
       if (cancelled) sink.notify(summary, "trash cancelled", "info");
       else if (failed > 0) sink.notify(summary, "trash failed", "error");
+      // a PARTIAL move is not a success: the file is in the trash (restorable
+      // — its .trashinfo was kept) but the SOURCE still holds leftovers, and
+      // the user has to know that (a green toast would hide it)
+      else if (partial.length) sink.notify(summary, "trash partial", "error");
       else sink.notify(summary, "trash", "success");
       emit("trash", paths);
     });

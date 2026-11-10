@@ -36,6 +36,8 @@ import {
   fileIdMatches,
   fileIdOf,
   trashIfSameFile,
+  SourceRemovalFailedError,
+  type TrashMoveOutcome,
 } from "./fsutil";
 
 // mkdtemp only creates the last segment — the parent must be a dir that
@@ -353,13 +355,14 @@ describe("the XDG trash rollback phase", () => {
   // missing directory (writeFile → ENOENT) — the same "the info write
   // failed" condition the production code rolls back for.
   const strandedMove = (src: string) => {
-    return async (from: string, to: string): Promise<void> => {
+    return async (from: string, to: string): Promise<TrashMoveOutcome> => {
       if (from !== src) throw new Error("rollback refused");
       await fsMove(from, to);
       const root = path.dirname(path.dirname(to));
       const infoPath = path.join(root, "info", `${path.basename(to)}.trashinfo`);
       rmSync(infoPath, { force: true });
       symlinkSync(path.join(root, "missing-dir", "info"), infoPath);
+      return { kind: "moved" };
     };
   };
 
@@ -407,6 +410,89 @@ describe("the XDG trash rollback phase", () => {
     expect((err as { strandedPath?: string }).strandedPath).toBe(path.join(root1, "files", "fallthrough.txt"));
     // the SECOND root was never tried
     expect(existsSync(path.join(root2, "files", "fallthrough.txt"))).toBe(false);
+  });
+});
+
+// The cross-device trash: the copy lands in the trash root, but the SOURCE
+// removal fails. The entry is then the user's ONLY complete copy — so its
+// .trashinfo MUST survive (an entry without one cannot be restored) and the
+// error must name the trash path (a bare "FAILED" hides where the data went).
+describe("the XDG trash LANDED phase", () => {
+  const landedMove = () => {
+    return async (from: string, to: string): Promise<TrashMoveOutcome> => {
+      await fsMove(from, to);
+      // the source removal failed — the file is complete in the trash root
+      return { kind: "landed", sourceRemovalFailed: new Error("permission denied") };
+    };
+  };
+
+  test("a landed file KEEPS its .trashinfo and the error names the trash path", async () => {
+    const src = path.join(SANDBOX, "landed.txt");
+    writeFileSync(src, "payload");
+    const root = path.join(SANDBOX, "landed-root");
+    const trashPath = path.join(root, "files", "landed.txt");
+    const infoPath = path.join(root, "info", "landed.txt.trashinfo");
+    const err = await xdgTrashMoveToRoot(src, root, landedMove()).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(Error);
+    // the error NAMES the trash path — that is where the data is
+    expect((err as { trashPath?: string }).trashPath).toBe(trashPath);
+    expect(String((err as Error).message)).toContain(trashPath);
+    expect(fsErrText(err)).toContain(trashPath);
+    // the file is complete in the trash root
+    expect(existsSync(trashPath)).toBe(true);
+    expect(readFileSync(trashPath, "utf8")).toBe("payload");
+    // and its info SURVIVED with the real mapping — the entry is restorable
+    expect(existsSync(infoPath)).toBe(true);
+    expect(readFileSync(infoPath, "utf8")).toContain(`Path=${encodeTrashPath(src)}`);
+  });
+
+  test("a landed file does NOT fall through to the next trash root", async () => {
+    // the file is in THIS root's files dir — the next root would fail with
+    // ENOENT and mask the real error (the user would never learn where
+    // their file is)
+    const src = path.join(SANDBOX, "landed-fallthrough.txt");
+    writeFileSync(src, "payload");
+    const root1 = path.join(SANDBOX, "landed-root1");
+    const root2 = path.join(SANDBOX, "landed-root2");
+    const err = await xdgTrashMove(src, { roots: [root1, root2], move: landedMove() }).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect((err as { trashPath?: string }).trashPath).toBe(path.join(root1, "files", "landed-fallthrough.txt"));
+    // the SECOND root was never tried
+    expect(existsSync(path.join(root2, "files", "landed-fallthrough.txt"))).toBe(false);
+  });
+
+  test("a move that THROWS a partial-removal error is the landed phase too", async () => {
+    // fsMove's own EXDEV fallback lands the copy and then fails to remove
+    // the source — it THROWS, it does not report an outcome. The trash loop
+    // must read that throw as "the file is in the trash root": dropping the
+    // .trashinfo here would make the entry unrestorable (an orphan file the
+    // user cannot get back).
+    const src = path.join(SANDBOX, "threw.txt");
+    writeFileSync(src, "payload");
+    const root = path.join(SANDBOX, "threw-root");
+    const trashPath = path.join(root, "files", "threw.txt");
+    const infoPath = path.join(root, "info", "threw.txt.trashinfo");
+    const throwingMove = async (from: string, to: string): Promise<TrashMoveOutcome> => {
+      await fsMove(from, to);
+      throw new SourceRemovalFailedError(to, new Error("permission denied"));
+    };
+    const err = await xdgTrashMoveToRoot(src, root, throwingMove).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(Error);
+    expect((err as { trashPath?: string }).trashPath).toBe(trashPath);
+    expect(fsErrText(err)).toContain(trashPath);
+    // the file is complete in the trash root ...
+    expect(existsSync(trashPath)).toBe(true);
+    // ... and its info SURVIVED (the entry is restorable)
+    expect(existsSync(infoPath)).toBe(true);
+    expect(readFileSync(infoPath, "utf8")).toContain(`Path=${encodeTrashPath(src)}`);
   });
 });
 
