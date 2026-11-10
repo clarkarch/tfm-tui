@@ -15,6 +15,7 @@ import { whichLive } from "../fs/which";
 import { loadSystemPlaces } from "../fs/places";
 import { buildMountArgs, buildUnmountArgs, gvfsRoot, takeGioPrompt, type GioPrompt } from "../fs/network";
 import { makeNetworkActions, type GioResult } from "../fs/netmount";
+import { gioExitCode, gioOutcomeFor, makeGioRun, markGioInterrupted } from "../fs/gio-outcome";
 import { makeMenu, MENU_W } from "../ui/ui-menu";
 import { makeChrome } from "../ui/ui-chrome";
 import { makeToolbar, toolbarItemIds, crumbItemIds, type PathEditPeer } from "../ui/ui-toolbar";
@@ -549,15 +550,17 @@ export const wireChrome = async (deps: {
       // missing gio binary: Bun throws ENOENT synchronously — degrade to a
       // failure result (connect/disconnect already toast GioResult failures)
       // instead of an unhandled rejection out of the fire-and-forget wrapper
-      return { code: 127, stdout: "", stderr: errMessage(err) };
+      return { outcome: "failed", code: 127, stdout: "", stderr: errMessage(err) };
     }
+    // ONE interruption state for the run (not a `timedOut` × `cancelled`
+    // boolean pair): the deadline wins over a cancel in either order, and
+    // the outcome is derived ONCE when the child is done.
+    const run = makeGioRun();
     let timer: ReturnType<typeof setTimeout> | undefined;
-    let timedOut = false;
-    let cancelled = false;
     const arm = (): void => {
       if (timer) clearTimeout(timer);
       timer = setTimeout(() => {
-        timedOut = true;
+        markGioInterrupted(run, "timed-out");
         try {
           proc.kill();
         } catch {}
@@ -582,7 +585,7 @@ export const wireChrome = async (deps: {
         password: p.password,
       });
       if (answer === null) {
-        cancelled = true;
+        markGioInterrupted(run, "cancelled");
         try {
           proc.kill();
         } catch {}
@@ -607,7 +610,7 @@ export const wireChrome = async (deps: {
           if (!p) break;
           buf = buf.slice(p.consumed);
           await answerPrompt(p);
-          if (cancelled) return;
+          if (run.state.kind === "interrupted") return;
         }
       }
     })();
@@ -618,8 +621,11 @@ export const wireChrome = async (deps: {
     const code = await proc.exited;
     clearTimeout(timer);
     await Promise.all([stdoutDone, stderrDone]);
-    if (cancelled) return { code: 130, stdout: "", stderr: "cancelled" };
-    return { code, stdout: "", stderr: timedOut ? stderr || "timed out" : stderr };
+    // the outcome is derived ONCE — the interruption (if any) wins over the
+    // child's exit code, and the child's stderr stays the raw output (the
+    // CONSUMER reports the interruption's reason, not the child's line)
+    const outcome = gioOutcomeFor(run, code);
+    return { outcome, code: gioExitCode(outcome, code), stdout: "", stderr };
   };
 
   const network = makeNetworkActions({

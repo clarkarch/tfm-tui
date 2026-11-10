@@ -21,11 +21,11 @@ const makeSink = (opts: {
     gvfsRoot: () => "/run/user/4242/gvfs",
     mount: async (uri) => {
       calls.mount.push(uri);
-      return opts.result ?? { code: 0, stdout: "", stderr: "" };
+      return opts.result ?? { outcome: "ok", code: 0, stdout: "", stderr: "" };
     },
     unmount: async (uri) => {
       calls.unmount.push(uri);
-      return opts.result ?? { code: 0, stdout: "", stderr: "" };
+      return opts.result ?? { outcome: "ok", code: 0, stdout: "", stderr: "" };
     },
     readdir: async () => (typeof opts.names === "function" ? opts.names() : (opts.names ?? [])),
     notify: (m, t, l) => calls.notify.push([m, t, l]),
@@ -75,10 +75,32 @@ describe("makeNetworkActions.connect", () => {
   });
 
   test("surfaces the tool's error line when the mount fails", async () => {
-    const { sink, calls } = makeSink({ result: { code: 1, stdout: "", stderr: "Error: password required\n" } });
+    const { sink, calls } = makeSink({
+      result: { outcome: "failed", code: 1, stdout: "", stderr: "Error: password required\n" },
+    });
     const actions = makeNetworkActions(sink);
     expect(await actions.connect("sftp://host/")).toBeNull();
     expect(calls.notify.at(-1)).toEqual(["Connect failed · Error: password required", "network", "error"]);
+  });
+
+  test("a timed-out mount reports the TIMEOUT, not the child's error line", async () => {
+    // the child wrote to stderr before the deadline fired — the old shape
+    // reported that line and the deadline vanished
+    const { sink, calls } = makeSink({
+      result: { outcome: "timed-out", code: 143, stdout: "", stderr: "Error: connecting to host\n" },
+    });
+    const actions = makeNetworkActions(sink);
+    expect(await actions.connect("sftp://host/")).toBeNull();
+    expect(calls.notify.at(-1)).toEqual(["Connect failed · timed out", "network", "error"]);
+  });
+
+  test("a cancelled mount reports the cancellation", async () => {
+    const { sink, calls } = makeSink({
+      result: { outcome: "cancelled", code: 130, stdout: "", stderr: "" },
+    });
+    const actions = makeNetworkActions(sink);
+    expect(await actions.connect("sftp://host/")).toBeNull();
+    expect(calls.notify.at(-1)).toEqual(["Connect failed · cancelled", "network", "error"]);
   });
 });
 
@@ -108,7 +130,7 @@ describe("makeNetworkActions.disconnect", () => {
   });
 
   test("keeps the mapping on a failed unmount", async () => {
-    const { sink, calls } = makeSink({ result: { code: 1, stdout: "", stderr: "Error: busy" } });
+    const { sink, calls } = makeSink({ result: { outcome: "failed", code: 1, stdout: "", stderr: "Error: busy" } });
     const actions = makeNetworkActions(sink);
     const p = "/run/user/4242/gvfs/sftp:host=example.com,user=bob";
     actions.rememberUri(p, "sftp://bob@example.com/");

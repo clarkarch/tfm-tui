@@ -2,6 +2,7 @@ import path from "node:path";
 import { readdir } from "node:fs/promises";
 import { errMessage } from "../lib/uiutil";
 import { gvfsRoot, parseGvfsName, parseServerInput } from "./network";
+import { gioOutcomeMessage, type GioOutcome } from "./gio-outcome";
 import type { NotifyLevel } from "../lib/notify-level";
 
 // --- Network location orchestration: connect/disconnect through `gio mount`
@@ -9,7 +10,12 @@ import type { NotifyLevel } from "../lib/notify-level";
 // so the unit is testable without a server or a desktop session. Connecting
 // goes through GVFS so the mount becomes an ordinary local FUSE path. ---
 
-export type GioResult = { code: number; stdout: string; stderr: string };
+// The result carries the run's OUTCOME — the decision the run made — plus
+// the exit code and the captured output. The consumer reads the OUTCOME, not
+// the code: a timed-out run's code (124) says nothing that the outcome does
+// not say better, and a child's exit code never distinguishes "the app gave
+// up" from "the tool failed".
+export type GioResult = { outcome: GioOutcome; code: number; stdout: string; stderr: string };
 
 export type NetworkSink = {
   gvfsRoot(): string;
@@ -31,6 +37,16 @@ const lastLine = (s: string): string =>
     .map((l) => l.trim())
     .filter(Boolean)
     .pop() ?? "";
+
+// Why the run failed — the INTERRUPTION's reason when the app gave up
+// (the deadline / the user's cancel), else the child's own error line.
+// The interruption wins: the child's stderr says what the tool was doing
+// when the app killed it, not WHY the operation ended.
+const gioFailureReason = (res: GioResult): string => {
+  const interruption = gioOutcomeMessage(res.outcome);
+  if (interruption) return interruption;
+  return lastLine(res.stderr) || lastLine(res.stdout) || "unknown error";
+};
 
 // active gvfs mounts under the runtime dir; unreadable/missing root = none
 export const listNetworkMounts = async (
@@ -104,8 +120,8 @@ export const makeNetworkActions = (sink: NetworkSink) => {
       sink.notify(`Connect failed · ${errMessage(err)}`, "network", "error");
       return null;
     }
-    if (res.code !== 0) {
-      const why = lastLine(res.stderr) || lastLine(res.stdout) || "unknown error";
+    if (res.outcome !== "ok") {
+      const why = gioFailureReason(res);
       sink.notify(`Connect failed · ${why}`, "network", "error");
       sink.log?.(`gio mount ${parsed.uri} exit ${res.code}: ${why}`);
       return null;
@@ -135,8 +151,8 @@ export const makeNetworkActions = (sink: NetworkSink) => {
       sink.notify(`Disconnect failed · ${errMessage(err)}`, "network", "error");
       return false;
     }
-    if (res.code !== 0) {
-      const why = lastLine(res.stderr) || lastLine(res.stdout) || "unknown error";
+    if (res.outcome !== "ok") {
+      const why = gioFailureReason(res);
       sink.notify(`Disconnect failed · ${why}`, "network", "error");
       sink.log?.(`gio mount -u ${uri} exit ${res.code}: ${why}`);
       return false;

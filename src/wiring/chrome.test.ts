@@ -29,6 +29,26 @@ describe("the chrome wiring's path-edit registry", () => {
     expect(src.includes("pathEditPeers.some((peer) => peer.isOpen())")).toBe(true);
   });
 
+  test("the gio run's outcome comes from the shared leaf, not a local boolean pair", async () => {
+    const src = (await Bun.file(`${import.meta.dir}/chrome.ts`).text())
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/\/\/[^\n]*/g, "");
+    // the run carries ONE interruption value and the outcome is derived
+    // ONCE — the old shape kept two booleans and mapped them at the end,
+    // where the CANCEL branch won and hid the deadline
+    expect(src.includes('from "../fs/gio-outcome"')).toBe(true);
+    expect(/let timedOut = false/.test(src)).toBe(false);
+    expect(/let cancelled = false/.test(src)).toBe(false);
+    // and the result's outcome is decided by the leaf's pure function
+    expect(src.includes("gioOutcomeFor(")).toBe(true);
+    // both interruptions are recorded through the leaf's ONE marker — a
+    // local flag here would reintroduce the pair the leaf replaced
+    expect(/markGioInterrupted\(run, "timed-out"\)/.test(src)).toBe(true);
+    expect(/markGioInterrupted\(run, "cancelled"\)/.test(src)).toBe(true);
+    // and the result CARRIES the outcome (the consumer reads it)
+    expect(/outcome, code: gioExitCode\(/.test(src)).toBe(true);
+  });
+
   test("the late-bound impls are SLOTS, not no-op stubs", async () => {
     const src = (await Bun.file(`${import.meta.dir}/chrome.ts`).text())
       .replace(/\/\*[\s\S]*?\*\//g, "")
