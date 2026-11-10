@@ -31,14 +31,8 @@ import {
 } from "../fs/default-filemanager";
 import { installFileManagerService, resolveServiceExec } from "../app/filemanager-service";
 import { pointPaneAt } from "../app/panes";
-import {
-  AmbiguousPluginError,
-  derivePluginName,
-  installPlugin,
-  parseGitUrl,
-  removePluginDir,
-  updatePlugin,
-} from "../plugins/plugin-install";
+import { installPlugin, removePluginDir, updatePlugin } from "../plugins/plugin-install";
+import { makePluginOps } from "./plugin-ops";
 import { pluginsDir } from "../plugins/plugins";
 import { PLUGINS_ENABLED } from "../plugins/plugin-gate";
 import type { CoreWiring } from "./core";
@@ -74,10 +68,9 @@ export const wireSettings = (deps: {
   const { core, nav, chrome, grid, plugins, getRetheme, getPrompt, getConfirm, getUpdates } = deps;
 
   // --- Plugin git installer orchestration: prompt -> validate -> danger
-  // confirm -> clone/pull/rm -> rescan + live panel rebuild. Fire-and-forget
-  // rows (never throws — every failure is a toast + dlog). Serialized with
-  // an in-flight guard so double-activation can't double-clone. ---
-  let installBusy = false;
+  // confirm -> clone/pull/rm -> rescan + live panel rebuild. The mutation
+  // paths live in ./plugin-ops (fire-and-forget rows — never throws; every
+  // failure is a toast + dlog). ---
   // progress lives in the toast stack (sticky, closed on settle) — never on
   // the status bar, which the selection summary reclaims mid-operation.
   // Same shape as notify(): theme fg (bare Text inherits the wrong color on
@@ -114,114 +107,38 @@ export const wireSettings = (deps: {
       });
   };
 
-  const addFromUrl = (): void => {
-    if (installBusy) return;
-    installBusy = true;
-    void (async () => {
+  const pluginOps = makePluginOps({
+    notify: (message, title) => chrome.notify(message, title ?? "plugins"),
+    progress: stickyProgress,
+    confirm: (o) => plugins.confirm(o),
+    // getPrompt closes over the last-wired cluster (TDZ): post-boot only in
+    // practice, but a pre-boot call throws ReferenceError — toast it instead
+    // of swallowing it in the fire-and-forget catch below
+    prompt: async () => {
+      let prompt: { open(o: { title: string; placeholder?: string; okLabel?: string }): Promise<string | null> };
       try {
-        if (!whichLive("git")) {
-          chrome.notify("git not found · install git", "plugins");
-          return;
-        }
-        // getPrompt closes over the last-wired cluster (TDZ): post-boot only
-        // in practice, but a pre-boot call throws ReferenceError — toast it
-        // instead of swallowing it in the fire-and-forget catch below
-        let prompt: { open(o: { title: string; placeholder?: string; okLabel?: string }): Promise<string | null> };
-        try {
-          prompt = getPrompt();
-        } catch {
-          chrome.notify("Prompt unavailable · still booting", "plugins");
-          return;
-        }
-        const raw = await prompt.open({
-          title: "Add plugin · runs code as you",
-          placeholder: "https://github.com/owner/repo[#ref] [subdir]",
-          okLabel: "Clone",
-        });
-        if (raw === null) return;
-        let name: string;
-        try {
-          name = derivePluginName(parseGitUrl(raw));
-        } catch (err) {
-          chrome.notify(errMessage(err), "add plugin");
-          return;
-        }
-        // early collision hint on the derived name (the install may still
-        // normalize to a different final name — that error surfaces below)
-        try {
-          if (existsSync(path.join(pluginsDir(), name))) {
-            chrome.notify(`Already installed · remove first`, "add plugin");
-            return;
-          }
-        } catch {}
-        dlog(`plugin install requested: ${raw} -> ${name}`);
-        // title-only: the Yes/No dialog slices its message to one 34-char
-        // row, so any body is cut mid-sentence (the trust warning already
-        // leads the URL prompt's title, and the outcome toast reports back)
-        const ok = await plugins.confirm({
-          title: `Install "${name}"?`,
-          danger: true,
-        });
-        if (!ok) return;
-        const doneCloning = stickyProgress("plugins", `Cloning ${name}…`);
-        try {
-          const res = await installPlugin({ dir: pluginsDir(), raw });
-          dlog(`plugin installed: ${res.name} from ${raw}`);
-          chrome.notify(`Installed ${res.name}`, "plugins");
-        } catch (err) {
-          if (err instanceof AmbiguousPluginError) {
-            chrome.notify(`Repo has ${err.candidates.length} plugins · retry with URL subdir`, "add plugin");
-          } else {
-            chrome.notify(errMessage(err), "add plugin");
-          }
-          dlog(`plugin install failed: ${errMessage(err)}`);
-          return;
-        } finally {
-          doneCloning();
-        }
-        refreshPluginsView();
-      } finally {
-        installBusy = false;
+        prompt = getPrompt();
+      } catch {
+        chrome.notify("Prompt unavailable · still booting", "plugins");
+        return null;
       }
-    })().catch(() => {});
-  };
-
-  const updateOne = (name: string): void => {
-    void (async () => {
-      const doneUpdating = stickyProgress("plugins", `Updating ${name}…`);
-      try {
-        const out = await updatePlugin({ dir: pluginsDir(), name });
-        dlog(`plugin updated: ${name}: ${out}`);
-        chrome.notify(`${name} · ${out}`, "plugins");
-      } catch (err) {
-        chrome.notify(errMessage(err), "plugins");
-        return;
-      } finally {
-        doneUpdating();
-      }
-      refreshPluginsView();
-    })().catch(() => {});
-  };
-
-  const removeOne = (name: string): void => {
-    void (async () => {
-      // title-only (see above — bodies are sliced mid-sentence by the dialog)
-      const ok = await plugins.confirm({
-        title: `Remove "${name}"?`,
-        danger: true,
+      return prompt.open({
+        title: "Add plugin · runs code as you",
+        placeholder: "https://github.com/owner/repo[#ref] [subdir]",
+        okLabel: "Clone",
       });
-      if (!ok) return;
-      try {
-        removePluginDir(pluginsDir(), name);
-      } catch (err) {
-        chrome.notify(errMessage(err), "plugins");
-        return;
-      }
-      dlog(`plugin removed: ${name}`);
-      chrome.notify(`Removed ${name}`, "plugins");
-      refreshPluginsView();
-    })().catch(() => {});
-  };
+    },
+    install: (raw) => installPlugin({ dir: pluginsDir(), raw }),
+    update: (name) => updatePlugin({ dir: pluginsDir(), name }),
+    remove: (name) => removePluginDir(pluginsDir(), name),
+    exists: (name) => existsSync(path.join(pluginsDir(), name)),
+    hasGit: () => !!whichLive("git"),
+    log: dlog,
+    refresh: refreshPluginsView,
+  });
+  const addFromUrl = pluginOps.addFromUrl;
+  const updateOne = pluginOps.update;
+  const removeOne = pluginOps.remove;
 
   // opens inside tfm (navigate), not the OS file manager — the user stays
   // in the app and gets the grid, previews and file ops over the folder.
