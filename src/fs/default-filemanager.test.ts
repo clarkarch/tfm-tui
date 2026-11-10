@@ -361,6 +361,31 @@ describe("makeDefaultFileManagerOrchestration", () => {
     expect(probes).toBe(2);
   });
 
+  test("the probe cache expires when its TTL passes (the clock is injected)", () => {
+    // the TTL is a TIMING UNIT → it takes an injected clock, not the wall
+    // clock: with Date.now() baked in, the expiry is untestable (and the
+    // cache's window silently depends on the machine's clock).
+    let now = 1_000;
+    let probes = 0;
+    const orch = makeDefaultFileManagerOrchestration({
+      currentDefault: () => {
+        probes++;
+        return "org.gnome.Nautilus.desktop";
+      },
+      cacheTtlMs: 500,
+      now: () => now,
+    });
+    expect(orch.current()).toBe("org.gnome.Nautilus.desktop");
+    expect(orch.current()).toBe("org.gnome.Nautilus.desktop");
+    expect(probes).toBe(1); // inside the window → memoized
+    now += 499;
+    expect(orch.current()).toBe("org.gnome.Nautilus.desktop");
+    expect(probes).toBe(1); // still inside the window
+    now += 2; // past the TTL
+    expect(orch.current()).toBe("org.gnome.Nautilus.desktop");
+    expect(probes).toBe(2); // the window closed → a fresh probe
+  });
+
   test("a failed set keeps the cache (nothing changed on disk)", async () => {
     let probes = 0;
     const orch = makeDefaultFileManagerOrchestration({

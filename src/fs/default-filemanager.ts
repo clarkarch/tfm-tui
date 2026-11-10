@@ -71,15 +71,26 @@ export const makeDefaultFileManagerOrchestration = (
     // rebuilds the model per hover step and each rebuild reads current()
     // twice — without this every hover spawns xdg-mime twice: the lag)
     cacheTtlMs?: number;
+    // the cache's clock — a timing unit, so it is INJECTED (the wall clock
+    // baked in made the expiry untestable: no test could advance the window
+    // without sleeping)
+    now?: () => number;
   } = {},
 ): DefaultFileManagerOrchestration => {
   const ttl = deps.cacheTtlMs ?? 2000;
-  let cached = "";
-  let cachedAt = 0;
-  let hasCache = false;
+  const clock = deps.now ?? Date.now;
+  // The probe cache is ONE record: `null` = nothing cached (the next call
+  // probes), `{value, at}` = a cached probe + when it was taken. The old
+  // shape was three variables (`cached` / `cachedAt` / `hasCache`) — a
+  // tri-state spelled as scalars, where "cached value present but hasCache
+  // false" was a REACHABLE combination and "dropping the cache" meant
+  // flipping one of the three (the other two kept values nobody could read,
+  // and a future edit could easily read them as live).
+  type ProbeCache = { value: string; at: number } | null;
+  let cache: ProbeCache = null;
   const liveProbe = (): string => {
-    const now = Date.now();
-    if (hasCache && now - cachedAt < ttl) return cached;
+    const now = clock();
+    if (cache && now - cache.at < ttl) return cache.value;
     let value = "";
     if (deps.currentDefault) {
       try {
@@ -94,13 +105,11 @@ export const makeDefaultFileManagerOrchestration = (
         value = "";
       }
     }
-    cached = value;
-    cachedAt = now;
-    hasCache = true;
+    cache = { value, at: now };
     return value;
   };
   const dropCache = (): void => {
-    hasCache = false;
+    cache = null;
   };
   const marker = deps.markerFile ? { markerFile: deps.markerFile } : {};
   return {
