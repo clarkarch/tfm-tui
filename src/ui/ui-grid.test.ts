@@ -93,6 +93,9 @@ let searchSignals: AbortSignal[];
 let searchGate: Promise<void> | null;
 let searchEntries: Entry[];
 let viewMode: "grid" | "list";
+// how many times the grid asked the listings-cache seam (the grid must READ
+// it — the cache can only be turned off if the grid asks)
+let listingsCacheReads: number;
 let rasterSig: string;
 let selection: ReturnType<typeof makeSelection>;
 let renderGrid: (force?: boolean) => Promise<void>;
@@ -145,6 +148,7 @@ beforeAll(async () => {
   thumbJobs = [];
   iconSlots = [];
   mouseHandlers = [];
+  listingsCacheReads = 0;
   searchQuery = "";
   wrapMode = "none";
   recursiveSearch = false;
@@ -286,6 +290,18 @@ beforeAll(async () => {
     sched: revealClock.sched,
     now: () => testNow,
     windowedGrid: () => windowedGridOn,
+    // the listings cache OFF for the grid's tests: the module-global cache is
+    // keyed by the DIR's mtime, and on a filesystem with COARSE timestamp
+    // granularity (tmpfs here, some exFAT/FUSE mounts) a file written right
+    // after the previous scan does NOT bump it → the cache serves the OLD
+    // membership → the grid's tests failed at random (a file the test had
+    // just created was missing from the next render). The cache's own
+    // behavior is covered in fs/listing.test.ts; the grid's seam is pinned
+    // below ("the grid reads the listings-cache seam").
+    listingsCache: () => {
+      listingsCacheReads++;
+      return false;
+    },
     isRenaming: () => renamingOn,
     smoothScroll: () => smoothOn,
     smoothScrollMs: () => 90,
@@ -1031,6 +1047,14 @@ describe("renderGrid (grid tiles)", () => {
     // setTileVisual(Rest) on a cut key routes icon state 3 (cut)
     expect(iconStateCalls.some((c) => c.idx === 3)).toBe(true);
     cutKeys.clear();
+  });
+
+  test("the grid reads the listings-cache seam (the cache can be turned off)", async () => {
+    // the grid must ASK the seam: a grid that ignored it could never honor
+    // `[ui] listings-cache = off` (the setting would be a no-op)
+    listingsCacheReads = 0;
+    await renderGrid();
+    expect(listingsCacheReads).toBeGreaterThan(0);
   });
 
   test("an unchanged listing skips the rebuild (no cross-pane refresh)", async () => {
