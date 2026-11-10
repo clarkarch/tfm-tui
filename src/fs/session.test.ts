@@ -1,8 +1,15 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { readRestoredSession, saveSession, sessionFile, type PaneTabs } from "./session";
+import {
+  readRestoredSession,
+  saveSession,
+  saveSessionSync,
+  sessionFile,
+  SESSION_VERSION,
+  type PaneTabs,
+} from "./session";
 
 const oldStateHome = process.env.XDG_STATE_HOME;
 afterEach(() => {
@@ -31,6 +38,61 @@ describe("sessionFile", () => {
 });
 
 describe("readRestoredSession", () => {
+  test("the written document DECLARES its version", async () => {
+    // the format is a state machine, not a shape to be sniffed: the document
+    // says which generation it is
+    const root = sandbox();
+    try {
+      const panes: [PaneTabs, PaneTabs] = [
+        { tabs: [{ history: [root], histIdx: 0 }], activeTab: 0 },
+        { tabs: [{ history: [os.tmpdir()], histIdx: 0 }], activeTab: 0 },
+      ];
+      await saveSession(panes, 0);
+      const doc = JSON.parse(readFileSync(sessionFile(), "utf8")) as { version?: number };
+      expect(doc.version).toBe(SESSION_VERSION);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("the synchronous final write declares its version too (the quit path)", () => {
+    // process.exit() kills the pending async save — this is the write that
+    // actually lands, so it must declare the version as well
+    const root = sandbox();
+    try {
+      const panes: [PaneTabs, PaneTabs] = [
+        { tabs: [{ history: [root], histIdx: 0 }], activeTab: 0 },
+        { tabs: [{ history: [os.tmpdir()], histIdx: 0 }], activeTab: 0 },
+      ];
+      saveSessionSync(panes, 0);
+      const doc = JSON.parse(readFileSync(sessionFile(), "utf8")) as { version?: number };
+      expect(doc.version).toBe(SESSION_VERSION);
+      expect(readRestoredSession()!.panes[0].tabs[0]!.history).toEqual([root]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a declared version wins over shape sniffing", () => {
+    // the document says "I am the current generation" — a LEGACY-shaped
+    // body is then NOT read as legacy (the sniffing is only the fallback for
+    // files written before the version existed)
+    writeDoc({ version: SESSION_VERSION, tabs: [{ history: [os.tmpdir()], histIdx: 0 }], activeTab: 0 });
+    expect(readRestoredSession()).toBeNull();
+  });
+
+  test("an unknown declared version is not read as legacy", () => {
+    // a document from a NEWER tfm may reuse any key with a new meaning — and
+    // it may even carry a panes-shaped body. Sniffing it would misread the
+    // shape, so an unknown version restores nothing (the caller keeps its
+    // default tabs)
+    writeDoc({
+      version: SESSION_VERSION + 1,
+      panes: [{ tabs: [{ history: [os.tmpdir()], histIdx: 0 }], activeTab: 0 }, { tabs: [] }],
+    });
+    expect(readRestoredSession()).toBeNull();
+  });
+
   test("round-trips both pane tab lists and the active pane", async () => {
     const root = sandbox();
     try {

@@ -22,16 +22,24 @@ export type Tab = { history: string[]; histIdx: number };
 export type PaneTabs = { tabs: Tab[]; activeTab: number };
 export type RestoredSession = { panes: [PaneTabs, PaneTabs]; activePane: 0 | 1 };
 
+// The document's generation. The format is a state machine, not a shape to
+// be sniffed: a document SAYS which generation it is, and the reader
+// switches on that. The shape-sniffing below is the LEGACY fallback for
+// files written before the version existed — a document from a NEWER tfm
+// may reuse any key with a new meaning, so an unknown version is not read
+// at all (the caller keeps its default tabs).
+export const SESSION_VERSION = 2;
+
 export const saveSession = async (panes: [PaneTabs, PaneTabs], activePane: 0 | 1): Promise<void> => {
   await mkdir(path.dirname(sessionFile()), { recursive: true });
-  await writeFile(sessionFile(), JSON.stringify({ panes, activePane }));
+  await writeFile(sessionFile(), JSON.stringify({ version: SESSION_VERSION, panes, activePane }));
 };
 
 // synchronous final write for quit: process.exit() kills pending async IO,
 // so the debounced save would lose the last navigation
 export const saveSessionSync = (panes: [PaneTabs, PaneTabs], activePane: 0 | 1): void => {
   mkdirSync(path.dirname(sessionFile()), { recursive: true });
-  writeFileSync(sessionFile(), JSON.stringify({ panes, activePane }));
+  writeFileSync(sessionFile(), JSON.stringify({ version: SESSION_VERSION, panes, activePane }));
 };
 
 // directory check shared with virtual places: recent/starred/archive URIs are
@@ -46,6 +54,12 @@ const usable = (p: string): boolean => {
 };
 
 const paneAt = (cwd: string): Tab => ({ history: [cwd], histIdx: 0 });
+
+// a JSON number (or anything numeric-looking) as an int; anything else is 0
+const intOf = (v: unknown): number => {
+  const n = typeof v === "number" ? v : Number(v);
+  return Number.isFinite(n) ? Math.trunc(n) : 0;
+};
 
 // filter a raw tab's history to usable dirs; null when nothing survives
 const sanitizeTab = (raw: unknown): Tab | null => {
@@ -69,31 +83,43 @@ const sanitizePaneTabs = (raw: unknown): PaneTabs | null => {
   return { tabs, activeTab: Math.min(Math.max(0, (p.activeTab as number) | 0), tabs.length - 1) };
 };
 
+// the CURRENT generation's reader: two independent pane tab lists (one pane
+// missing its usable tabs mirrors the other's)
+const readPanes = (raw: unknown, activePane: 0 | 1): RestoredSession | null => {
+  const panes = raw as unknown[];
+  const a = sanitizePaneTabs(panes?.[0]);
+  const b = sanitizePaneTabs(panes?.[1]);
+  const base = a ?? b;
+  if (!base) return null;
+  return {
+    panes: [
+      a ?? { tabs: base.tabs.map((t) => ({ history: [...t.history], histIdx: t.histIdx })), activeTab: 0 },
+      b ?? { tabs: base.tabs.map((t) => ({ history: [...t.history], histIdx: t.histIdx })), activeTab: 0 },
+    ],
+    activePane,
+  };
+};
+
 // Parse + sanitize the session file. Returns null when there is nothing usable
 // to restore — callers then keep their default tabs.
 export const readRestoredSession = (): RestoredSession | null => {
   try {
-    const doc = JSON.parse(readFileSync(sessionFile(), "utf8"));
+    const doc = JSON.parse(readFileSync(sessionFile(), "utf8")) as Record<string, unknown>;
     const activePane: 0 | 1 = doc?.activePane === 1 ? 1 : 0;
 
-    // current format: two independent pane tab lists
-    if (Array.isArray(doc?.panes)) {
-      const a = sanitizePaneTabs(doc.panes[0]);
-      const b = sanitizePaneTabs(doc.panes[1]);
-      const base = a ?? b;
-      if (!base) return null;
-      return {
-        panes: [
-          a ?? { tabs: base.tabs.map((t) => ({ history: [...t.history], histIdx: t.histIdx })), activeTab: 0 },
-          b ?? { tabs: base.tabs.map((t) => ({ history: [...t.history], histIdx: t.histIdx })), activeTab: 0 },
-        ],
-        activePane,
-      };
+    // the DECLARED generation wins: switch on it, never sniff
+    if (doc && typeof doc === "object" && "version" in doc) {
+      if (doc.version !== SESSION_VERSION) return null;
+      return readPanes(doc.panes, activePane);
     }
+
+    // LEGACY fallback (a document written before the version existed): the
+    // shapes are probed, oldest last
+    if (Array.isArray(doc?.panes)) return readPanes(doc.panes, activePane);
 
     if (Array.isArray(doc?.tabs)) {
       const rawTabs = doc.tabs as Array<Record<string, unknown>>;
-      const activeTab = Math.min(Math.max(0, doc.activeTab | 0), Math.max(0, rawTabs.length - 1));
+      const activeTab = Math.min(Math.max(0, intOf(doc.activeTab)), Math.max(0, rawTabs.length - 1));
       // shared-tabs dual format: each tab carried panes:[left,right] — split it
       const shared = rawTabs.some((t) => Array.isArray(t?.panes));
       if (shared) {
