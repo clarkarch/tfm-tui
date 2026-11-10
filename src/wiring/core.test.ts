@@ -50,10 +50,10 @@ type CoreHarness = {
   restore: () => void;
 };
 
-const coreHarness = (scrim: "fill" | "dim" | "none"): CoreHarness => {
+const coreHarness = (scrim: "fill" | "dim" | "none", uiExtra = ""): CoreHarness => {
   const dir = mkdtempSync(path.join(os.tmpdir(), "tfm-core-"));
   const cfg = path.join(dir, "config.toml");
-  writeFileSync(cfg, `[ui]\nscrim = "${scrim}"\nscrim-dim = 35\n`);
+  writeFileSync(cfg, `[ui]\nscrim = "${scrim}"\nscrim-dim = 35\n${uiExtra}`);
   const prevConfig = process.env.TFM_CONFIG;
   process.env.TFM_CONFIG = cfg;
   const content = { opacity: 0 };
@@ -140,8 +140,48 @@ describe("the app content's presentation", () => {
   });
 });
 
-// --- The grid scrollers' MOUNT.
+// --- The boot's MODE.
 //
+// [ui] lazy-startup picks the startup shape, and the old code spelled that
+// ONE fact FOUR ways: an INVERTED capture in this module
+// (`burstStartup = config.ui.lazyStartup !== true`), a SECOND capture in
+// wireBoot (`lazyBootFlag = core.config.ui?.lazyStartup === true`), and a
+// LIVE re-read of the config in the chrome and the plugins wirings.
+//
+// The mode is ONE value now, derived ONCE (here) and read everywhere — and
+// it is CAPTURED: a live config reload mutates config.ui, but the boot's
+// shape must not change mid-session (lazy-startup is restart-required).
+describe("the boot's mode", () => {
+  test("the core derives the mode from [ui] lazy-startup", () => {
+    const lazy = coreHarness("fill", "lazy-startup = true\n");
+    try {
+      expect(lazy.core.bootMode).toBe("lazy");
+    } finally {
+      lazy.restore();
+    }
+    const classic = coreHarness("fill");
+    try {
+      expect(classic.core.bootMode).toBe("classic");
+    } finally {
+      classic.restore();
+    }
+  });
+
+  test("the mode is CAPTURED — a live config change does not flip the boot's shape", () => {
+    const h = coreHarness("fill");
+    try {
+      expect(h.core.bootMode).toBe("classic");
+      // the config watcher reloads the file into the LIVE config object — the
+      // boot's shape is already committed, so the mode must not move
+      h.core.config.ui.lazyStartup = true;
+      expect(h.core.bootMode).toBe("classic");
+    } finally {
+      h.restore();
+    }
+  });
+});
+
+// --- The grid scrollers' MOUNT.//
 // The scrollers are built by the boot layout — BOTH panes in one step
 // (buildBootLayout returns the pair) — and the grid renders INTO the active
 // pane's scroller. The old shape was two mutable `{current}` boxes: a

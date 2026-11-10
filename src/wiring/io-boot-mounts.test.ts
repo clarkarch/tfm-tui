@@ -8,7 +8,11 @@ import { runBootMountsLoad, runBootMountsRefresh, type BootMountsCtx } from "./i
 const harness = (over: Partial<{ lazy: boolean; drainRejects: boolean }> = {}) => {
   const calls: string[] = [];
   const ctx: BootMountsCtx = {
-    lazyBoot: () => over.lazy ?? false,
+    // the boot's MODE — a VALUE, not a getter: the old ctx read a
+    // `lazyBoot(): boolean` twice (the load and the refresh), so a mode
+    // that changed between the two reads could skip the load AND skip the
+    // refresh — the Devices rows would stay empty with no error
+    mode: over.lazy ? "lazy" : "classic",
     loadAll: () => {
       calls.push("load-all");
       return Promise.resolve();
@@ -77,5 +81,27 @@ describe("runBootMountsRefresh", () => {
     await settleUntil(() => calls.includes("repaint"));
     await Bun.sleep(50); // let the rejection land (or crash the test)
     expect(calls).toContain("load-all");
+  });
+});
+
+// --- The boot's MODE reaches the mounts branch and the boot sequence.
+//
+// The old wiring captured the config's lazy-startup field a SECOND time
+// (`lazyBootFlag = core.config.ui?.lazyStartup === true`) while the core
+// held its own INVERTED capture of the same field. Two captures of opposite
+// polarity: the mounts branch and the prompt order were decided from a
+// value that could disagree with the shape the app had already committed
+// to.
+describe("the boot wiring's mode", () => {
+  test("the io wiring takes the mode from the core, not from the config", async () => {
+    const src = (await Bun.file(`${import.meta.dir}/io.ts`).text())
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/\/\/[^\n]*/g, "");
+    // the config field is read ONCE, in wireCore (which derives the mode)
+    expect(src.includes("lazyStartup")).toBe(false);
+    // and the core's mode is read ONCE here, into the value both consumers
+    // share (the mounts ctx and the boot ctx)
+    expect(/const mode = core\.bootMode/.test(src)).toBe(true);
+    expect(src.match(/core\.bootMode/g)?.length ?? 0).toBe(1);
   });
 });

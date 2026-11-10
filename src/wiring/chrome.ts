@@ -20,7 +20,8 @@ import { makeMenu, MENU_W } from "../ui/ui-menu";
 import { makeChrome } from "../ui/ui-chrome";
 import { makeToolbar, toolbarItemIds, crumbItemIds, type PathEditPeer } from "../ui/ui-toolbar";
 import { buildAppContainer, buildTitle } from "../ui/ui-boot-layout";
-import { warmEmbeddedIcons, warmSvgRenderer, shouldWarmBootCaches } from "../ui/icons";
+import { warmEmbeddedIcons, warmSvgRenderer } from "../ui/icons";
+import { isLazyBoot } from "../lib/boot-mode";
 import type { NodeLike } from "../lib/node-like";
 import { makeNotify } from "../ui/notify";
 import { rasterSigOf } from "../ui/tty";
@@ -352,11 +353,11 @@ export const wireChrome = async (deps: {
   // on a macrotask during runBoot's I/O wait (not in the first drain worker).
   // Off (default) = classic: the first drain pays both inline. Skipped where
   // drains never run (tty/force-glyph) — pure waste on the console.
-  // One shared gate (ui/icons): the two call sites can't drift apart.
-  // Optional-chain: old fakes carry no ui section (absent = classic boot).
-  const lazyBoot = (): boolean => shouldWarmBootCaches(core.config.ui?.lazyStartup);
+  // The gate is the boot's CAPTURED mode (wireCore derives it once) — a live
+  // re-read of the config could flip the warm while the boot's shape stayed
+  // classic.
   const drainsRun = !core.isTtyMode() && !core.forceGlyph();
-  if (lazyBoot() && drainsRun) {
+  if (isLazyBoot(core.bootMode) && drainsRun) {
     warmEmbeddedIcons();
     warmSvgRenderer();
   }
@@ -373,7 +374,8 @@ export const wireChrome = async (deps: {
   // restores tfm's bg (restoreBackgroundColor) in the same tick as the
   // content's opacity, so the app lands in ONE frame.
   const applyBootBg = (): void => {
-    if (!core.burstStartup) return;
+    // the burst startup = the classic shape (lazy startup ON)
+    if (isLazyBoot(core.bootMode)) return;
     renderer.setBackgroundColor(bootClearColor(true, core.config.ui.transparentBg, core.colors.bg, core.isTtyMode()));
   };
   applyRendererBg();

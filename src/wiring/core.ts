@@ -30,6 +30,7 @@ import {
 import { makeFloats } from "../ui/floats";
 import { initialAppState } from "../app/nav";
 import { appendLog } from "../lib/log";
+import { bootModeFor, isLazyBoot } from "../lib/boot-mode";
 import { activeFacade, activeState, makePanePair, otherState, setActivePane, togglePane } from "../app/panes";
 
 export type CoreWiring = ReturnType<typeof wireCore>;
@@ -62,9 +63,12 @@ export const wireCore = (deps: {
   // the grid, then the icons).
   // ON: the app paints IMMEDIATELY and the rest lands in the background —
   // the progressive arrival IS the feature (a fast first paint).
-  // Read ONCE: lazy-startup is restart-required (a live flip would change
-  // the boot's shape mid-session).
-  const burstStartup = config.ui.lazyStartup !== true;
+  // Read ONCE, here: lazy-startup is restart-required (a live flip would
+  // change the boot's shape mid-session), so the mode is CAPTURED and every
+  // consumer reads THIS value — the old shape held an inverted capture here
+  // and a second, opposite-polarity capture in wireBoot, plus live config
+  // re-reads in the chrome and the plugins wirings.
+  const bootMode = bootModeFor(config.ui.lazyStartup);
 
   // --- Geometry applyConfig() rewrites through this cell — never bake into consts ---
   const geometry = {
@@ -184,7 +188,7 @@ export const wireCore = (deps: {
   // The phase is the whole truth: "hidden-for-boot" (the app is not on
   // screen yet), "dimmed" (a modal is open) or "visible". ONE function
   // applies the WHOLE presentation it implies.
-  let contentVisibility: ContentVisibility = burstStartup ? "hidden-for-boot" : "visible";
+  let contentVisibility: ContentVisibility = isLazyBoot(bootMode) ? "visible" : "hidden-for-boot";
   const presentation = (): ContentPresentation =>
     contentPresentation(contentVisibility, config.ui.scrimMode, config.ui.scrimDim);
   const applyContentVisibility = (): void => {
@@ -313,9 +317,10 @@ export const wireCore = (deps: {
     // re-apply the modal dim after a config change (scrim mode flip / theme
     // change while a modal is open) — no-op when no modal is up
     reapplyModalDim: () => applyModalDim(floats.hasModal()),
-    // the boot's reveal: with lazy startup OFF the app content is transparent
-    // until the first frame is complete (the "burst" startup)
-    burstStartup,
+    // the boot's MODE — captured once from [ui] lazy-startup. Every boot
+    // consumer (the mounts branch, the resolution budget, the prompt's
+    // position, the icon warms, the plugin scan) reads THIS value.
+    bootMode,
     setBootHidden,
     // the content's opacity for the BUILD (the phase owns it — the boot
     // hides the app by building the content transparent)

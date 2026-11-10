@@ -12,7 +12,6 @@ import {
   brandPng,
   clearFailedThumbs,
   clearIconCaches,
-  shouldWarmBootCaches,
   svgAspect,
   iconCacheKey,
   iconPng,
@@ -511,18 +510,6 @@ describe("icons", () => {
       pngjs: false,
       utif2: false,
     });
-  });
-
-  test("shouldWarmBootCaches gates both boot warms on [ui] lazy-startup", () => {
-    // the single gate wiring/chrome reads for warmEmbeddedIcons +
-    // warmSvgRenderer: only an explicit true warms (default off = classic
-    // boot pays both inline). Strict equality — legacy hand-edited truthy
-    // TOML ("yes"/1) must not silently opt into the lazy path.
-    expect(shouldWarmBootCaches(true)).toBe(true);
-    expect(shouldWarmBootCaches(false)).toBe(false);
-    expect(shouldWarmBootCaches(undefined)).toBe(false);
-    expect(shouldWarmBootCaches("yes")).toBe(false);
-    expect(shouldWarmBootCaches(1)).toBe(false);
   });
 
   test.skipIf(!hasInproc)("warmSvgRenderer dlopens resvg outside the first drain (lazy first paint)", async () => {

@@ -8,6 +8,7 @@
 // testable with fakes. ---
 
 import { debugLog } from "../lib/log";
+import type { BootMode } from "../lib/boot-mode";
 
 export type BootCtx = {
   waitForResolution(): Promise<void>;
@@ -55,10 +56,13 @@ export type BootCtx = {
   promptDefaultFileManager?(): void;
   // fire-and-forget update check (only starts one; never awaits the network)
   checkUpdates?(): void;
-  // [ui] lazy-startup: already-known at boot (config loads before). Classic
-  // boots keep the legacy order; lazy moves the sync dialog probe past the
-  // launch report. Absent = classic.
-  lazyBoot?: boolean;
+  // [ui] lazy-startup: the boot's MODE — the ONE value that picks the
+  // startup shape (classic = the app paints in one burst; lazy = paint
+  // first, the rest lands in the background). It is REQUIRED: the old shape
+  // spelled it `lazyBoot?: boolean`, where "absent" meant classic, so a ctx
+  // that forgot the mode silently ran the legacy boot. The wiring derives it
+  // once from the config (see lib/boot-mode) and passes it down.
+  mode: BootMode;
   debugTrace(): void;
   launchToast(): void;
   startHygiene(): void;
@@ -132,15 +136,22 @@ export const runBoot = async (ctx: BootCtx): Promise<void> => {
   await guard(ctx, "playTopbarIntro", () => ctx.playTopbarIntro?.());
   // the reveal: the app content is transparent until now (the burst startup)
   await guard(ctx, "revealApp", () => ctx.revealApp?.());
-  // lazy startup: the sync verdict probe (~200ms of blocked event loop) is not
-  // needed for the first frame or first input — run it after the launch report
-  // so boot finishes and the app is interactive sooner. Classic keeps it here
-  // (unchanged legacy order: the prompt precedes the report).
-  if (ctx.lazyBoot !== true) await guard(ctx, "promptDefaultFileManager", () => ctx.promptDefaultFileManager?.());
-  debugLog("boot: done");
-  if (ctx.isDebug) await guard(ctx, "debugTrace", () => ctx.debugTrace());
-  if (ctx.isDebug || ctx.showLaunchTime()) await guard(ctx, "launchToast", () => ctx.launchToast());
-  if (ctx.lazyBoot === true) await guard(ctx, "promptDefaultFileManager", () => ctx.promptDefaultFileManager?.());
+  // --- the boot's tail. The ONE thing the mode decides is WHERE the
+  // default-file-manager prompt lands: classic asks BEFORE the launch report
+  // (the legacy order), lazy asks AFTER it — the verdict probe is a
+  // SYNCHRONOUS xdg-mime spawn (~200ms of blocked event loop) and under lazy
+  // it must not sit on the launch path (the first frame and the first input
+  // must not wait for it). The old shape ran the SAME step at two positions,
+  // picked by a boolean read twice with opposite polarity.
+  const promptStep = (): Promise<void> =>
+    guard(ctx, "promptDefaultFileManager", () => ctx.promptDefaultFileManager?.());
+  const reportStep = async (): Promise<void> => {
+    if (ctx.isDebug) await guard(ctx, "debugTrace", () => ctx.debugTrace());
+    if (ctx.isDebug || ctx.showLaunchTime()) await guard(ctx, "launchToast", () => ctx.launchToast());
+  };
+  for (const step of ctx.mode === "classic" ? [promptStep, reportStep] : [reportStep, promptStep]) {
+    await step();
+  }
   await guard(ctx, "startHygiene", () => ctx.startHygiene());
   // the paint trace is a --debug diagnostic (it reads the renderer's stats on
   // every presented frame), so it only runs when the debug log is on
@@ -150,4 +161,8 @@ export const runBoot = async (ctx: BootCtx): Promise<void> => {
   // launch report or the default-file-manager prompt (and it never blocks:
   // the step only starts the check)
   await guard(ctx, "checkUpdates", () => ctx.checkUpdates?.());
+  // "boot: done" marks the ACTUAL end of the sequence — it used to fire
+  // before the launch report, the hygiene poke, the search wiring and the
+  // update check, so the debug timeline's last line was a lie in BOTH modes
+  debugLog("boot: done");
 };

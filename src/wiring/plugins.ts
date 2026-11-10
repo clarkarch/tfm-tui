@@ -24,6 +24,7 @@ import type { CoreWiring } from "./core";
 import type { ChromeWiring, GridFoundationWiring, NavWiring } from "./types";
 import { tdzSafe } from "./late-slot";
 import { makeBootPaintGate } from "../app/boot-phase";
+import { isLazyBoot } from "../lib/boot-mode";
 
 export type PluginsWiring = Awaited<ReturnType<typeof wirePlugins>>;
 
@@ -294,7 +295,10 @@ export const wirePlugins = async (deps: {
   // watcher, keymap) don't exist yet, so an eager renderAll would TDZ-throw
   // inside every step that reads them (grid/keymap/watcher/plugins getters).
   // The boot sequence's own renderAll paints everything once those exist.
-  if (core.config.ui?.lazyStartup === true) {
+  // the boot's MODE — captured once in wireCore (the config loads there).
+  // The old shape re-read the config here, so a live reload could flip the
+  // scan's gate while the boot's shape stayed classic.
+  if (isLazyBoot(core.bootMode)) {
     void registry
       .scan()
       .then(() => {

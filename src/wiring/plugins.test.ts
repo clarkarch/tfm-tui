@@ -119,7 +119,7 @@ describe("background scan (lazy first paint)", () => {
       let renders = 0;
       const t0 = Date.now();
       const wiring = await wirePlugins({
-        core: { state: { cwd: "/x" }, config: { keys: {}, ui: { lazyStartup: true } } } as never,
+        core: { state: { cwd: "/x" }, bootMode: "lazy", config: { keys: {} } } as never,
         nav: {
           navigate: () => {},
           setStatusMsg: () => {},
@@ -186,7 +186,7 @@ describe("background scan (lazy first paint)", () => {
     try {
       let renders = 0;
       const wiring = await wirePlugins({
-        core: { state: { cwd: "/x" }, config: { keys: {}, ui: { lazyStartup: true } } } as never,
+        core: { state: { cwd: "/x" }, bootMode: "lazy", config: { keys: {} } } as never,
         nav: {
           navigate: () => {},
           setStatusMsg: () => {},
@@ -241,7 +241,7 @@ describe("background scan (lazy first paint)", () => {
       const t0 = Date.now();
       let renders = 0;
       const wiring = await wirePlugins({
-        core: { state: { cwd: "/x" }, config: { keys: {}, ui: { lazyStartup: false } } } as never,
+        core: { state: { cwd: "/x" }, bootMode: "classic", config: { keys: {} } } as never,
         nav: {
           navigate: () => {},
           setStatusMsg: () => {},

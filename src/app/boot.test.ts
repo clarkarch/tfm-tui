@@ -34,6 +34,10 @@ const mkCtx = (calls: string[], over: Partial<BootCtx> = {}): BootCtx => ({
   },
   isDebug: false,
   showLaunchTime: () => false,
+  // the boot's MODE — required (the old ctx spelled it `lazyBoot?: boolean`,
+  // where "absent" meant classic: a ctx that forgot the mode silently ran
+  // the legacy boot)
+  mode: "classic",
   ...over,
 });
 
@@ -192,7 +196,7 @@ describe("runBoot", () => {
     const calls: string[] = [];
     await runBoot(
       mkCtx(calls, {
-        lazyBoot: true,
+        mode: "lazy",
         showLaunchTime: () => true,
         promptDefaultFileManager: () => {
           calls.push("defmgr");
@@ -211,6 +215,7 @@ describe("runBoot", () => {
     const calls: string[] = [];
     await runBoot(
       mkCtx(calls, {
+        mode: "classic",
         showLaunchTime: () => true,
         promptDefaultFileManager: () => {
           calls.push("defmgr");
@@ -218,6 +223,20 @@ describe("runBoot", () => {
       }),
     );
     expect(calls.indexOf("defmgr")).toBeLessThan(calls.indexOf("toast"));
+  });
+
+  test("the boot carries a MODE, not a boolean", async () => {
+    // the old ctx spelled the mode as `lazyBoot?: boolean` — a tri-state
+    // (absent = classic) read twice with opposite polarity, and the wiring
+    // captured the config field a SECOND time to feed it
+    const src = (await Bun.file(`${import.meta.dir}/boot.ts`).text())
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/\/\/[^\n]*/g, "");
+    expect(src.includes("lazyBoot")).toBe(false);
+    expect(/mode: BootMode/.test(src)).toBe(true);
+    // the mode is REQUIRED — "absent" is not a state (absent used to mean
+    // classic, so a ctx that forgot the mode silently ran the legacy boot)
+    expect(/mode\?: BootMode/.test(src)).toBe(false);
   });
 
   test("absent default-file-manager step changes nothing (old fakes keep working)", async () => {

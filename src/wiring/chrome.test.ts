@@ -49,6 +49,16 @@ describe("the chrome wiring's path-edit registry", () => {
     expect(/outcome, code: gioExitCode\(/.test(src)).toBe(true);
   });
 
+  test("the boot's warm gate reads the CAPTURED mode, not a live config read", async () => {
+    const src = (await Bun.file(`${import.meta.dir}/chrome.ts`).text())
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/\/\/[^\n]*/g, "");
+    // the mode is captured ONCE (in wireCore) — a live re-read of the config
+    // here could flip the warm gate while the boot's shape stayed classic
+    expect(src.includes("core.config.ui?.lazyStartup")).toBe(false);
+    expect(src.includes("core.bootMode")).toBe(true);
+  });
+
   test("the late-bound impls are SLOTS, not no-op stubs", async () => {
     const src = (await Bun.file(`${import.meta.dir}/chrome.ts`).text())
       .replace(/\/\*[\s\S]*?\*\//g, "")

@@ -259,10 +259,10 @@ const svgRenderer = (): SvgRendererKind => (loadInprocResvg() === null ? null : 
 // index.ts continues past `await wireChrome` and delays first paint by the
 // full dlopen; the macrotask lands during runBoot's I/O wait instead.
 // [ui] lazy-startup gates BOTH warms in wiring/chrome (off = classic: the
-// first drain pays them inline). shouldWarmBootCaches is the shared gate so
-// the two call sites can't drift (one warmed + one not = half the win for
-// the same config read).
-export const shouldWarmBootCaches = (lazyStartup: unknown): boolean => lazyStartup === true;
+// first drain pays them inline). The gate is the boot's CAPTURED MODE
+// (src/lib/boot-mode — the one place lazy-startup is interpreted), so the
+// two warms can't drift (one warmed + one not = half the win for the same
+// config read) and no call site spells the rule a second time.
 
 export const warmSvgRenderer = (): void => {
   setTimeout(() => {

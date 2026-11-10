@@ -22,6 +22,7 @@ import { mergedMapFacade } from "../app/panes";
 import { loadGlobs2 } from "../fs/filetype";
 import { loadSystemPlaces, listMounts } from "../fs/places";
 import { startMemHygiene, type NativeStatsReach } from "../lib/mem-hygiene";
+import { isLazyBoot, type BootMode } from "../lib/boot-mode";
 import { startPaintTrace } from "../lib/frame-stats";
 import { xtShiftEscapeFrame, kittyDeleteAllImages } from "../ui/ui-term";
 import { RESOLUTION_LAZY_SETTLE_MS } from "../ui/ui-lookup";
@@ -122,9 +123,11 @@ export const wireDeviceWatcher = (deps: { nav: NavWiring; chrome: ChromeWiring; 
 // inline, refresh step a no-op. Prod closures below are thin arrows over
 // loadSystemPlaces/renderSidebar/drainIconQueue; boot.ts owns the ordering. ---
 export type BootMountsCtx = {
-  // strict === true read of the flag (optional-chain at the call site: old
-  // fakes carry no ui section — absent = classic boot, never lazy)
-  lazyBoot(): boolean;
+  // the boot's MODE — a VALUE, not a getter: the old ctx read a
+  // `lazyBoot(): boolean` twice (the load and the refresh), so a mode that
+  // changed between the two reads could skip the load AND skip the refresh
+  // — the Devices rows would stay empty with no error
+  mode: BootMode;
   loadAll(): Promise<void>;
   loadWithoutMounts(): Promise<void>;
   repaintSidebar(): void;
@@ -133,11 +136,11 @@ export type BootMountsCtx = {
 };
 
 export const runBootMountsLoad = (ctx: BootMountsCtx): Promise<void> =>
-  ctx.lazyBoot() ? ctx.loadWithoutMounts() : ctx.loadAll();
+  isLazyBoot(ctx.mode) ? ctx.loadWithoutMounts() : ctx.loadAll();
 
 export const runBootMountsRefresh = (ctx: BootMountsCtx): void => {
   // classic boot already loaded mounts inline — nothing to refresh
-  if (!ctx.lazyBoot()) return;
+  if (!isLazyBoot(ctx.mode)) return;
   // fire-and-forget ON PURPOSE (never awaited by boot): the whole point
   // of the lazy mounts path is that first paint doesn't wait for lsblk.
   // Ordering vs the intros: play() re-resolves its row ids live at play
@@ -306,14 +309,16 @@ export const wireBoot = (deps: {
   afterLayout?: () => void;
 }) => {
   const { core, nav, chrome, gridFoundation, grid, fileops, bootStart } = deps;
-  // [ui] lazy-startup: captured ONCE here (config loads in wireCore, before
-  // boot runs — nothing rewrites it mid-boot, and the key is restart:true +
-  // RENDER_EXEMPT so no live path can either). A live re-read per step could
-  // split the pair (skip-load + no-refresh = Devices missing until restart).
-  // Optional-chain: old fakes carry no ui section (absent = classic, never lazy).
-  const lazyBootFlag = core.config.ui?.lazyStartup === true;
+  // [ui] lazy-startup: the boot's MODE — captured ONCE in wireCore (the
+  // config loads there, before the boot runs) and read HERE as a value.
+  // Nothing rewrites it mid-boot (the key is restart:true + RENDER_EXEMPT,
+  // so no live path can either), and the mounts branch, the resolution
+  // budget and the boot sequence all read THIS ONE value — the old shape
+  // captured the config field a second time here, with the opposite
+  // polarity to the core's capture.
+  const mode = core.bootMode;
   const mountsCtx: BootMountsCtx = {
-    lazyBoot: () => lazyBootFlag,
+    mode,
     loadAll: () => loadSystemPlaces(),
     loadWithoutMounts: () => loadSystemPlaces({ skipMounts: true }),
     repaintSidebar: () => chrome.chrome.renderSidebar(),
@@ -326,7 +331,7 @@ export const wireBoot = (deps: {
     // caps that budget: first paint must not wait ~2s on a probe that (on this
     // class of terminal) will never be answered — the single biggest launch
     // cost the lazy path can remove.
-    waitForResolution: () => core.resolutionGate.settle(lazyBootFlag ? RESOLUTION_LAZY_SETTLE_MS : undefined),
+    waitForResolution: () => core.resolutionGate.settle(isLazyBoot(mode) ? RESOLUTION_LAZY_SETTLE_MS : undefined),
     // the system theme's boot apply sets the renderer's bg to the DERIVED
     // theme's bg — the burst startup needs the boot frame to keep matching
     // the TERMINAL's bg (invisible), so re-apply the hide right after
@@ -408,8 +413,8 @@ export const wireBoot = (deps: {
         renderAllSettled: () => nav.renderAllSettled(),
         drainIcons: () => core.slots.drainIconQueue(),
         // lazy startup OFF = the burst startup: wait for the complete first
-        // frame before the app is revealed
-        burst: core.burstStartup,
+        // frame before the app is revealed (the burst IS the classic shape)
+        burst: !isLazyBoot(mode),
         log: (msg) => debugLog(msg),
       }),
     refreshMounts: () => runBootMountsRefresh(mountsCtx),
@@ -424,7 +429,8 @@ export const wireBoot = (deps: {
       }),
     promptDefaultFileManager: () => deps.promptDefaultFileManager?.(),
     checkUpdates: () => deps.checkUpdates?.(),
-    lazyBoot: lazyBootFlag,
+    // the boot's MODE — the one value every boot consumer reads
+    mode,
     debugTrace: () => {
       debugLog(
         `terminal ${chrome.renderer.terminalWidth}x${chrome.renderer.terminalHeight} cwd=${process.cwd()} config=${configPath()}`,
