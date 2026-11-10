@@ -114,6 +114,39 @@ describe("makeDeviceWatcher", () => {
     h.w.stop();
   });
 
+  test("a failed probe keeps the baseline — no unplug-all, no re-plug-all toast", async () => {
+    // The device list has THREE states: "here they are", "there are none"
+    // and "the probe FAILED" (null). The failure state is not an empty set:
+    // reading it as one made the watcher see an unplug-all (the sidebar
+    // re-listed) and then announce every drive as NEW on the next success.
+    // A failed probe is also an EXPECTED state, not an exception — the
+    // watcher must not report it as a crashed poll.
+    let current: MountEntry[] | null = [entry(STICK)];
+    const clock = makeClock();
+    const arrivals: MountEntry[][] = [];
+    const logs: string[] = [];
+    let changes = 0;
+    const w = makeDeviceWatcher({
+      devices: () => current,
+      onArrivals: (news) => arrivals.push(news),
+      onChange: () => changes++,
+      intervalMs: 2500,
+      sched: clock.sched,
+      log: (m) => logs.push(m),
+    });
+    await clock.step(1); // baseline capture
+    current = null; // the probe failed
+    await clock.step(1);
+    expect(changes).toBe(0);
+    expect(logs.some((l) => l.includes("poll failed"))).toBe(false);
+    current = [entry(STICK)]; // the probe works again
+    await clock.step(1);
+    // the stick was never unplugged → no arrival toast, no change
+    expect(arrivals).toEqual([]);
+    expect(changes).toBe(0);
+    w.stop();
+  });
+
   test("a non-USB change refreshes silently (no arrival toast)", async () => {
     const internal = (target: string): MountEntry => ({
       label: "data",

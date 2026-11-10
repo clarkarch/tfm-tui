@@ -11,8 +11,10 @@ import type { Scheduler } from "../lib/uiutil";
 import type { MountEntry } from "./places";
 
 type DeviceWatcherCtx = {
-  // live lsblk device list (places.listMounts in prod; a fake array in tests)
-  devices: () => MountEntry[] | Promise<MountEntry[]>;
+  // live lsblk device list (places.listMounts in prod; a fake array in tests).
+  // null = the probe FAILED (unknown) — NOT "there are no devices": the
+  // watcher keeps its baseline and retries on the next tick.
+  devices: () => MountEntry[] | null | Promise<MountEntry[] | null>;
   // newly arrived USB disks (one group per disk, all its partitions) — the
   // wiring toasts these; boot-present drives never arrive here
   onArrivals: (news: MountEntry[]) => void;
@@ -73,6 +75,14 @@ export const makeDeviceWatcher = (ctx: DeviceWatcherCtx) => {
         (entries) => {
           inFlight = false;
           if (stopped) return;
+          // A FAILED probe (null) is UNKNOWN, not an empty device set: keep
+          // the old baseline so the next tick retries instead of reading the
+          // failure as an unplug-all (and then announcing every drive as new
+          // on the next success). It is an expected state, not a crash.
+          if (entries === null) {
+            ctx.log?.("devwatch probe failed: keeping the last device set");
+            return;
+          }
           const { parts, disks, usb } = snapshot(entries);
           if (last === null) {
             // baseline capture: boot-present drives stay silent

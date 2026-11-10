@@ -291,14 +291,24 @@ export function parseLsblk(json: unknown): MountEntry[] {
 
 // exported for the device watcher (devwatch.ts): the poll diffs this list,
 // loadSystemPlaces() re-reads everything only when it changed
-export async function listMounts(): Promise<MountEntry[]> {
+//
+// The device list has THREE states, and the third one used to be missing:
+//   a list  — "here they are"
+//   []      — "lsblk succeeded, there are no devices"
+//   null    — "the probe FAILED" (a wedged helper, a missing binary,
+//             garbage output) — UNKNOWN, which is NOT the same as empty.
+// The old code resolved [] for a failure, so one transient lsblk failure
+// emptied the Devices section (and the watcher read it as "every drive was
+// unplugged", then announced every drive as new on the next success).
+export async function listMounts(): Promise<MountEntry[] | null> {
   try {
     // timeout: a wedged lsblk must not stall the sidebar load forever
     const { code, stdout } = await execLsblk(["-J", "-o", "NAME,PATH,RM,TRAN,LABEL,FSTYPE,MOUNTPOINTS,MOUNTPOINT"]);
-    if (code !== 0) return [];
+    if (code !== 0) return null;
     return parseLsblk(JSON.parse(stdout));
   } catch {
-    return [];
+    // unparseable output is a failed probe, not "no devices"
+    return null;
   }
 }
 

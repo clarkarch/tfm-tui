@@ -243,6 +243,72 @@ describe("loadSystemPlaces skipMounts (lazy first paint)", () => {
   });
 });
 
+describe("the device list has THREE states", () => {
+  const oldPath = process.env.PATH;
+  afterEach(() => {
+    if (oldPath === undefined) delete process.env.PATH;
+    else process.env.PATH = oldPath;
+  });
+
+  const withDeviceStub = async (): Promise<{ root: string; stub: string }> => {
+    const root = path.join(os.tmpdir(), `tfm-places-dev-${process.pid}-${Date.now()}`);
+    const bin = path.join(root, "bin");
+    mkdirSync(bin, { recursive: true });
+    const stub = path.join(bin, "lsblk");
+    const json = JSON.stringify({
+      blockdevices: [
+        {
+          name: "sdb",
+          rm: true,
+          tran: "usb",
+          path: "/dev/sdb",
+          children: [{ name: "sdb1", fstype: "vfat", mountpoints: ["/media/usb"] }],
+        },
+      ],
+    });
+    writeFileSync(stub, `#!/bin/sh\ncat <<'EOF'\n${json}\nEOF\n`, { mode: 0o755 });
+    process.env.PATH = `${bin}${path.delimiter}${oldPath ?? ""}`;
+    return { root, stub };
+  };
+
+  const deviceRows = (): number => buildSections().find((s) => s.title === "Devices")?.places.length ?? 0;
+
+  test("a failed lsblk keeps the previous device rows", async () => {
+    // The device list has THREE states: "there are none" ([]), "the probe
+    // failed" (unknown) and "here they are". The failure one was MISSING:
+    // a wedged lsblk / a missing binary / garbage output resolved [] = "no
+    // devices", so ONE transient failure emptied the Devices section (and
+    // the sidebar rebuilt without the rows).
+    const { root, stub } = await withDeviceStub();
+    try {
+      await loadSystemPlaces();
+      expect(deviceRows()).toBe(2); // "This Device" + the stick
+      // now the probe fails
+      writeFileSync(stub, "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+      await loadSystemPlaces();
+      // the rows are STILL there — a failed probe is not "no devices"
+      expect(deviceRows()).toBe(2);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a successful lsblk that reports no devices empties the rows", async () => {
+    // the other direction: [] must still mean "there are none" — the fix
+    // cannot turn a real empty list into "keep the old rows"
+    const { root, stub } = await withDeviceStub();
+    try {
+      await loadSystemPlaces();
+      expect(deviceRows()).toBe(2);
+      writeFileSync(stub, `#!/bin/sh\necho '{"blockdevices":[]}'\n`, { mode: 0o755 });
+      await loadSystemPlaces();
+      expect(deviceRows()).toBe(1); // "This Device" only
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("virtual place uris used by places", () => {
   test("recent/starred are virtual", () => {
     expect(isVirtualUri("recent://")).toBe(true);
