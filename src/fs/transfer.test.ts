@@ -195,12 +195,12 @@ describe("copyFileProgress", () => {
       throw Object.assign(new Error("hardlinks unavailable"), { code: "ENOTSUP" });
     };
 
-    const id = await landCopiedFile(src, dest, unsupported);
+    const id = await landCopiedFile(src, dest, { doLink: unsupported });
     expect(readFileSync(dest, "utf8")).toBe("NEW");
     expect(id?.ino).toBe(lstatSync(dest).ino);
     expect(lstatSync(dest).mode & 0o777).toBe(0o640);
     expect(Math.floor(lstatSync(dest).mtimeMs / 1000)).toBe(new Date("2021-06-07T08:09:10Z").getTime() / 1000);
-    await expect(landCopiedFile(src, dest, unsupported)).rejects.toThrow("already exists");
+    await expect(landCopiedFile(src, dest, { doLink: unsupported })).rejects.toThrow("already exists");
     expect(readFileSync(dest, "utf8")).toBe("NEW");
   });
 
@@ -210,14 +210,12 @@ describe("copyFileProgress", () => {
     W(src, "NEW");
 
     await expect(
-      landCopiedFile(
-        src,
-        dest,
-        async () => {
+      landCopiedFile(src, dest, {
+        doLink: async () => {
           throw Object.assign(new Error("hardlinks unavailable"), { code: "ENOTSUP" });
         },
-        () => rmSync(src),
-      ),
+        afterClaim: () => rmSync(src),
+      }),
     ).rejects.toThrow();
 
     expect(existsSync(dest)).toBe(false);
@@ -229,21 +227,73 @@ describe("copyFileProgress", () => {
     W(src, "NEW");
 
     await expect(
-      landCopiedFile(
-        src,
-        dest,
-        async () => {
+      landCopiedFile(src, dest, {
+        doLink: async () => {
           throw Object.assign(new Error("hardlinks unavailable"), { code: "ENOTSUP" });
         },
-        () => {
+        afterClaim: () => {
           rmSync(dest);
           W(dest, "STRANGER");
           rmSync(src);
         },
-      ),
+      }),
     ).rejects.toThrow();
 
     expect(readFileSync(dest, "utf8")).toBe("STRANGER");
+  });
+
+  test("a failed cleanup NAMES the leftover destination (a silent leftover is a stuck copy)", async () => {
+    // The claimed destination is removed when the write fails — but if THAT
+    // removal fails, an empty file survives at the destination path. Every
+    // retry then says "already exists" and the copy is stuck for good. The
+    // old code swallowed the cleanup error, so the user never learned that
+    // something was left behind (or where).
+    const src = path.join(dir, "staged-stuck.txt");
+    const dest = path.join(dir, "stuck.txt");
+    W(src, "NEW");
+
+    const err = await landCopiedFile(src, dest, {
+      doLink: async () => {
+        throw Object.assign(new Error("hardlinks unavailable"), { code: "ENOTSUP" });
+      },
+      afterClaim: () => rmSync(src),
+      removeDest: async () => {
+        throw new Error("permission denied");
+      },
+    }).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(String((err as Error)?.message)).toContain("survived");
+    expect(String((err as Error)?.message)).toContain(dest);
+
+    // the failure names the leftover path AND says it survived
+    expect(existsSync(dest)).toBe(true);
+  });
+
+  test("a failure after the content landed keeps the complete copy and names it", async () => {
+    // The destination's phase: "claimed" = our empty/partial placeholder,
+    // "written" = the content is complete. Once the copy is COMPLETE, a
+    // failure in the final steps (the durability fsync) must not delete it —
+    // the source is intact, but the copy IS the user's data now. The error
+    // names the path so the leftover is never a mystery.
+    const src = path.join(dir, "staged-complete.txt");
+    const dest = path.join(dir, "complete.txt");
+    W(src, "PAYLOAD");
+
+    await expect(
+      landCopiedFile(src, dest, {
+        doLink: async () => {
+          throw Object.assign(new Error("hardlinks unavailable"), { code: "ENOTSUP" });
+        },
+        finalize: async () => {
+          throw new Error("disk full");
+        },
+      }),
+    ).rejects.toThrow(dest);
+
+    // the complete copy is still there — the failure did not destroy it
+    expect(readFileSync(dest, "utf8")).toBe("PAYLOAD");
   });
 
   test("an occupied destination is never replaced", async () => {
@@ -329,6 +379,32 @@ describe("copyTreeProgress", () => {
     expect(h.files).toBe(1);
     expect(existsSync(path.join(dir, "dst"))).toBe(false);
     expect(readdirSync(dir).filter((f) => f.includes(".tfm-part-"))).toEqual([]);
+  });
+
+  test("a failed directory landing NAMES the leftover claim (a silent empty dir is a stuck copy)", async () => {
+    // The directory lane claims the destination name with an EMPTY directory
+    // and then renames the staged tree onto it. If the landing fails and the
+    // claim cannot be removed, an empty directory survives at the
+    // destination path — every retry then says "already exists". The old
+    // code swallowed the rollback error, so the user never learned that
+    // something was left behind (or where).
+    const src = path.join(dir, "tree-src");
+    const dest = path.join(dir, "tree-dst");
+    W(path.join(src, "f.txt"), "NEW");
+
+    const err = await copyTreeProgress(src, dest, mkSink().sink, {
+      // the claim is no longer empty → the rename cannot replace it and
+      // the rollback cannot remove it
+      afterDirClaim: () => W(path.join(dest, "blocker"), "x"),
+    }).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(String((err as Error)?.message)).toContain("survived");
+    expect(String((err as Error)?.message)).toContain(dest);
+
+    // the claim survived, and the failure named it
+    expect(existsSync(dest)).toBe(true);
   });
 
   test("pause gate holds mid-walk and resumes", async () => {

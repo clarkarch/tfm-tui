@@ -699,10 +699,21 @@ describe("fileIdOf / fileIdMatches / trashIfSameFile", () => {
     const id = fileIdOf(p);
     expect(id).not.toBeNull();
     expect(fileIdMatches(id, p)).toBe(true);
-    expect(fileIdMatches(null, p)).toBe(true);
     expect(fileIdMatches({ dev: -1, ino: -1 }, p)).toBe(false);
     expect(fileIdMatches(id, path.join(SANDBOX, "id-missing.txt"))).toBe(false);
     expect(fileIdOf(path.join(SANDBOX, "id-missing.txt"))).toBeNull();
+  });
+
+  test("a null file id never authorizes a delete (unknown is not a match)", () => {
+    // A null id means "we do not know what is at the path". The old code
+    // answered TRUE — "assume yes" — so every caller that used the match as
+    // a delete-authorization (the copy engine's cleanup: "is this
+    // destination still MINE?") would delete a file it could not prove it
+    // owns. Unknown must never read as a match; the callers that want the
+    // "fall back to path semantics" behaviour say so at their own boundary.
+    const p = path.join(SANDBOX, "id-unknown.txt");
+    writeFileSync(p, "v1");
+    expect(fileIdMatches(null, p)).toBe(false);
   });
 
   // ext4 hands a freed inode straight to the next create (rm + write → same

@@ -222,12 +222,30 @@ export class SourceRemovalFailedError extends Error {
   }
 }
 
+// A copy/move landing that ended in a state the caller MUST know about: the
+// claimed destination survived the cleanup (every retry then says "already
+// exists" — a stuck copy) or the copy landed complete but a final step
+// failed. The message names the path, and `fsErrText` returns it WHOLE (the
+// op summaries quote it) — a bare errno would hide where the data is.
+export class TransferLandingError extends Error {
+  readonly destPath: string;
+  readonly landingError: unknown;
+  constructor(message: string, destPath: string, landingError: unknown) {
+    super(message);
+    this.name = "TransferLandingError";
+    this.destPath = destPath;
+    this.landingError = landingError;
+  }
+}
+
 export const fsErrText = (err: unknown): string => {
   // a stranded trash file names its path — the whole message IS the report
   // (the generic branch would cut it at the first colon)
   if (err instanceof TrashStrandedError) return err.message;
   // a partial move names the trash path AND the reason — same rule
   if (err instanceof TrashPartialMoveError) return err.message;
+  // a landing that left something behind names the path — same rule
+  if (err instanceof TransferLandingError) return err.message;
   const code = errCode(err);
   if (typeof code === "string") return FS_ERR_TEXT[code] ?? code.toLowerCase();
   return err instanceof Error ? (err.message.split(":")[0]?.toLowerCase() ?? "unknown error") : "unknown error";
@@ -773,19 +791,35 @@ export const fileIdOf = (p: string): FileId | null => {
   }
 };
 
+// Does the path still hold the file this id describes?
+//
+// A null id means "we do not know what is at the path" — and UNKNOWN is
+// never a match. The old code answered TRUE ("assume yes"), so every
+// caller that used the answer as a delete-authorization ("is this
+// destination still MINE?") deleted a file it could not prove it owned.
+// Callers that want the "fall back to plain path semantics" behaviour say
+// so at their own boundary (see `trashIfSameFile`).
 export const fileIdMatches = (id: FileId | null, p: string): boolean => {
-  if (id === null) return true;
+  if (id === null) return false;
   const cur = fileIdOf(p);
   return cur !== null && cur.dev === id.dev && cur.ino === id.ino && (id.born === undefined || cur.born === id.born);
 };
 
+// "is this path still the file we claimed?" — an UNKNOWN id (null) is never
+// a match: a cleanup must never delete a file it cannot prove it owns. (The
+// old `fileIdMatches(null, …)` answered TRUE — "assume yes" — so a null id
+// silently authorized the removal of whatever sat at the path.)
+export const stillOurs = (recorded: FileId | null, p: string): boolean =>
+  recorded !== null && fileIdMatches(recorded, p);
+
 // trash `p` only if it is still the recorded file: a missing path is already
 // at the desired end-state (success, nothing to do); a reoccupied path is
 // skipped with a log (trashing the stranger would be wrong) — neither throws.
-// A null id falls back to plain path semantics. Real trash errors propagate.
+// A null id means "unknown" → plain path semantics (the path itself is what
+// was recorded). Real trash errors propagate.
 export const trashIfSameFile = async (p: string, id: FileId | null, log?: (msg: string) => void): Promise<void> => {
   if (!existsSync(p)) return;
-  if (id && !fileIdMatches(id, p)) {
+  if (id !== null && !fileIdMatches(id, p)) {
     log?.(`undo trash ${p}: file replaced since op, skipped`);
     return;
   }

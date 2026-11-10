@@ -563,7 +563,7 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
       const tid = fileIdOf(trashLoc);
       units.push(async () => {
         if (!existsSync(trashLoc)) return;
-        if (tid && !fileIdMatches(tid, trashLoc)) {
+        if (tid !== null && !fileIdMatches(tid, trashLoc)) {
           ctx.log(`undo replace ${victimDest}: trashed copy changed, skipped`);
           return;
         }

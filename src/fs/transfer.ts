@@ -12,9 +12,19 @@ import {
   rmdir,
   symlink,
   utimes,
+  type FileHandle,
 } from "node:fs/promises";
 import path from "node:path";
-import { errCode, claimTmp, fileIdMatches, fileIdOf, fsyncPath, type FileId } from "./fsutil";
+import {
+  errCode,
+  claimTmp,
+  fileIdOf,
+  fsErrText,
+  fsyncPath,
+  stillOurs,
+  TransferLandingError,
+  type FileId,
+} from "./fsutil";
 import { swallow } from "../lib/log";
 import type { TransferSink } from "../lib/file-op-protocol";
 
@@ -89,12 +99,34 @@ const fsyncParentDir = (p: string): Promise<void> =>
   // fsync + exclusive landing already closed the half-copy window
   fsyncPath(path.dirname(p)).catch(() => {});
 
-export const landCopiedFile = async (
-  tmp: string,
-  dest: string,
-  doLink: (src: string, target: string) => Promise<void> = link,
-  afterClaim?: () => void,
-): Promise<FileId | null> => {
+// The destination's phase inside the landing:
+//   claimed — the destination is OUR exclusive placeholder; its content is
+//             NOT complete (an empty/partial file).
+//   written — the content stream completed: the destination holds the FULL
+//             copy, so a later failure must not delete it — the source is
+//             intact, but the copy IS the user's data now.
+// ONE tagged value: the cleanup gate reads it, and the failure report says
+// which state the destination was left in.
+type LandingPhase = { kind: "claimed" } | { kind: "written" };
+
+// The seams of the copy engine's landing step. They exist so the states the
+// landing can END in are reachable in a test: a real fsync failure and a real
+// unlink failure are not arrangeable (unlink needs the same directory
+// permission as the link, and fsync fails only on a dying disk).
+export type LandSeams = {
+  /** the exclusive link (the hardlink lane). A failure with an "unsupported" errno switches to the copy-in-place fallback. */
+  doLink?: (src: string, target: string) => Promise<void>;
+  /** runs right after the destination is claimed */
+  afterClaim?: () => void;
+  /** the cleanup: remove the claimed destination */
+  removeDest?: (p: string) => Promise<void>;
+  /** the post-write steps (mode/mtime restore + fsync) */
+  finalize?: (out: FileHandle) => Promise<void>;
+};
+
+export const landCopiedFile = async (tmp: string, dest: string, seams: LandSeams = {}): Promise<FileId | null> => {
+  const doLink = seams.doLink ?? link;
+  const removeDest = seams.removeDest ?? ((p: string) => rm(p, { force: true }));
   try {
     await doLink(tmp, dest);
     return fileIdOf(tmp);
@@ -112,8 +144,19 @@ export const landCopiedFile = async (
     });
     const id: FileId =
       st.birthtimeMs > 0 ? { dev: st.dev, ino: st.ino, born: st.birthtimeMs } : { dev: st.dev, ino: st.ino };
+    // the post-write steps: mode/mtime restore + the durability fsync. The
+    // mode/mtime restore is best effort (a wrong mode is cosmetic); the fsync
+    // is NOT (an unsynced copy can vanish in a crash).
+    const finalize =
+      seams.finalize ??
+      (async (handle: FileHandle): Promise<void> => {
+        await handle.chmod(meta.mode & 0o7777).catch(() => {});
+        await handle.utimes(meta.atime, meta.mtime).catch(() => {});
+        await handle.sync();
+      });
+    let phase: LandingPhase = { kind: "claimed" };
     try {
-      afterClaim?.();
+      seams.afterClaim?.();
       for await (const chunk of createReadStream(tmp)) {
         let offset = 0;
         while (offset < chunk.length) {
@@ -122,14 +165,37 @@ export const landCopiedFile = async (
           offset += bytesWritten;
         }
       }
-      await out.chmod(meta.mode & 0o7777).catch(() => {});
-      await out.utimes(meta.atime, meta.mtime).catch(() => {});
-      await out.sync();
+      // the content is complete — from here the destination holds the user's
+      // data, not our placeholder
+      phase = { kind: "written" };
+      await finalize(out);
       return id;
     } catch (copyErr) {
       await out.close().catch(() => {});
-      if (fileIdMatches(id, dest))
-        await rm(dest, { force: true }).catch((cleanup) => swallow("transfer fallback cleanup", cleanup));
+      const why = copyErr instanceof Error ? copyErr.message : String(copyErr);
+      if (phase.kind === "written") {
+        // the copy is COMPLETE: the source is intact, but the copy IS the
+        // user's data now — a failure handler must not delete it. Say WHERE
+        // it is (the op summary quotes the message).
+        throw new TransferLandingError(`the copy landed at ${dest} but its final step failed · ${why}`, dest, copyErr);
+      }
+      // phase: claimed — the destination is our INCOMPLETE placeholder: it
+      // may be removed, but ONLY while it is still ours (an unknown id never
+      // matches, and a stranger that took the path is never deleted).
+      if (stillOurs(id, dest)) {
+        try {
+          await removeDest(dest);
+        } catch (cleanupErr) {
+          // a surviving placeholder makes every retry say "already exists"
+          // (a permanently stuck copy) — the user has to learn that it is
+          // there, and where
+          throw new TransferLandingError(
+            `the claimed destination survived at ${dest} · ${fsErrText(cleanupErr)} · the copy failed: ${why}`,
+            dest,
+            cleanupErr,
+          );
+        }
+      }
       throw copyErr;
     } finally {
       await out.close().catch(() => {});
@@ -253,7 +319,22 @@ export const copyFileProgress = (src: string, dest: string, sink: TransferSink):
     );
   });
 
-export const copyTreeProgress = async (src: string, dest: string, sink: TransferSink): Promise<FileId | null> => {
+// The seams of the directory lane's landing. The rename that lands the
+// staged tree onto the claimed destination cannot fail on a test box (the
+// claim is an EMPTY directory and POSIX rename replaces it), so the hook is
+// what makes the "the landing failed and the claim survived" state
+// reachable.
+export type CopyTreeSeams = {
+  /** runs right after the destination directory is claimed */
+  afterDirClaim?: () => void;
+};
+
+export const copyTreeProgress = async (
+  src: string,
+  dest: string,
+  sink: TransferSink,
+  seams: CopyTreeSeams = {},
+): Promise<FileId | null> => {
   const st = await lstat(src);
   if (st.isSymbolicLink()) {
     // recreate the link itself — never stream through to the target's contents
@@ -279,19 +360,38 @@ export const copyTreeProgress = async (src: string, dest: string, sink: Transfer
     try {
       for (const k of await readdir(src)) {
         await sink.checkpoint();
-        await copyTreeProgress(path.join(src, k), path.join(tmp, k), sink);
+        await copyTreeProgress(path.join(src, k), path.join(tmp, k), sink, seams);
       }
       try {
         await chmod(tmp, st.mode & 0o7777);
         await utimes(tmp, st.atime, st.mtime);
       } catch {}
       const tmpId = fileIdOf(tmp);
+      // the destination is CLAIMED as an empty directory (the name is taken
+      // atomically; the staged tree lands on it with a rename)
       await mkdir(dest);
       const claimId = fileIdOf(dest);
+      seams.afterDirClaim?.();
       try {
         await rename(tmp, dest);
       } catch (err) {
-        if (claimId && fileIdMatches(claimId, dest)) await rmdir(dest).catch(() => {});
+        // the claim is an EMPTY placeholder: it may be removed, but ONLY
+        // while it is still ours (an unknown id never matches).
+        if (stillOurs(claimId, dest)) {
+          try {
+            await rmdir(dest);
+          } catch (rollbackErr) {
+            // a surviving empty directory makes every retry say "already
+            // exists" (a stuck copy) — the user has to learn it is there,
+            // and where
+            const why = err instanceof Error ? err.message : String(err);
+            throw new TransferLandingError(
+              `the claimed destination survived at ${dest} · ${fsErrText(rollbackErr)} · the copy failed: ${why}`,
+              dest,
+              rollbackErr,
+            );
+          }
+        }
         throw err;
       }
       await fsyncParentDir(dest);
