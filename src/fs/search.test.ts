@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { lstatSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { fdArgs, parseSearchPaths, searchTree } from "./search";
+import { fdArgs, fdOutcomeFor, parseSearchPaths, searchTree } from "./search";
+import type { FdOutcome } from "./search";
 
 // Recursive type-to-search backend: fd fast path (injectable runner) with a
 // built-in readdir walk fallback. Real temp trees for the fs paths; the fd
@@ -47,14 +48,33 @@ describe("fdArgs", () => {
   });
 });
 
+describe("fdOutcomeFor", () => {
+  test("the exit code decides the outcome (no matches is a valid answer)", () => {
+    // fd exits 1 on "no matches" — that is a SUCCESSFUL answer (the walk must
+    // NOT take over); 2+ is a real error (bad dir, permission) and the walk
+    // takes over.
+    expect(fdOutcomeFor(1, "", false)).toEqual({ ok: true, paths: [] });
+    expect(fdOutcomeFor(0, "/a\n/b\n", false)).toEqual({ ok: true, paths: ["/a", "/b"] });
+    expect(fdOutcomeFor(2, "", false)).toEqual({ ok: false, reason: "failed" });
+  });
+
+  test("an abort is neither a match nor a failure", () => {
+    // the abort WINS over the exit code: the caller abandoned the search, so
+    // its answer is void — reporting it as "no matches" would be a silently
+    // empty result set.
+    expect(fdOutcomeFor(0, "/a\n", true)).toEqual({ ok: false, reason: "aborted" });
+    expect(fdOutcomeFor(143, "", true)).toEqual({ ok: false, reason: "aborted" });
+  });
+});
+
 describe("searchTree", () => {
   test("fd path: maps output to relative-name entries with isDir from stat", async () => {
     W(path.join(dir, "sub", "bar.txt"));
     mkdirSync(path.join(dir, "sub", "bardir"));
-    const runner = async (_bin: string, args: string[], cwd: string) => {
+    const runner = async (_bin: string, args: string[], cwd: string): Promise<FdOutcome> => {
       expect(args.at(-1)).toBe("bar");
       expect(cwd).toBe(dir);
-      return `${path.join(dir, "sub", "bar.txt")}\n${path.join(dir, "sub", "bardir")}\n`;
+      return { ok: true, paths: [path.join(dir, "sub", "bar.txt"), path.join(dir, "sub", "bardir")] };
     };
     const entries = await searchTree(dir, "bar", { fdBin: "fd", runFd: runner });
     const byName = Object.fromEntries(entries.map((e) => [e.name, e]));
@@ -70,7 +90,9 @@ describe("searchTree", () => {
       fdBin: "fd",
       runFd: async () => {
         calls++;
-        return "";
+        // an empty path list is "no matches" — a VALID answer, and the walk
+        // must NOT take over (a matching file exists on disk)
+        return { ok: true, paths: [] };
       },
     });
     expect(entries).toEqual([]);
@@ -79,8 +101,42 @@ describe("searchTree", () => {
 
   test("fd failure falls back to the built-in walk", async () => {
     W(path.join(dir, "sub", "bar.txt"));
-    const entries = await searchTree(dir, "bar", { fdBin: "fd", runFd: async () => null });
+    const entries = await searchTree(dir, "bar", {
+      fdBin: "fd",
+      runFd: async () => ({ ok: false, reason: "failed" }),
+    });
     expect(entries.map((e) => e.name)).toContain("sub/bar.txt");
+  });
+
+  test("an aborted fd search is not reported as no matches", async () => {
+    // a matching file exists, so a search that FELL BACK to the walk would
+    // find it — the abort must win: no results, and NO walk fallback (the
+    // caller abandoned the search; walking the tree would burn CPU on a
+    // superseded search).
+    W(path.join(dir, "bar.txt"));
+    const entries = await searchTree(dir, "bar", {
+      fdBin: "fd",
+      runFd: async () => ({ ok: false, reason: "aborted" }),
+    });
+    expect(entries).toEqual([]);
+  });
+
+  test("a search abandoned AFTER fd answered yields no results", async () => {
+    // the lane can answer a moment before the caller's abort lands — the
+    // cancellation still wins over the answer (a stale result set would
+    // repaint a folder the user already moved on from)
+    W(path.join(dir, "bar.txt"));
+    const ac = new AbortController();
+    const entries = await searchTree(dir, "bar", {
+      fdBin: "fd",
+      signal: ac.signal,
+      runFd: async (_bin, _args, _cwd, signal) => {
+        expect(signal).toBe(ac.signal);
+        ac.abort();
+        return { ok: true, paths: [path.join(dir, "bar.txt")] };
+      },
+    });
+    expect(entries).toEqual([]);
   });
 
   test("walk fallback: case-insensitive substring, nested dirs, cap", async () => {
@@ -129,7 +185,7 @@ describe("searchTree", () => {
       signal: ac.signal,
       runFd: async () => {
         calls++;
-        return "";
+        return { ok: true, paths: [] };
       },
     });
     expect(entries).toEqual([]);
@@ -147,10 +203,11 @@ describe("searchTree", () => {
       fdBin: "fd",
       signal: ac.signal,
       runFd: async (_bin, _args, _cwd, signal) => {
-        // fd observes the abort and dies; it reports failure (null)
+        // fd observes the abort and dies; the lane reports a failure, and the
+        // caller's own cancellation still wins over it
         expect(signal).toBe(ac.signal);
         ac.abort();
-        return null;
+        return { ok: false, reason: "failed" };
       },
     });
     expect(entries).toEqual([]);

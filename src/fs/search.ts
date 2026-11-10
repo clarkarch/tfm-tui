@@ -12,6 +12,21 @@ import { whichLive } from "./which";
 
 export const DEFAULT_SEARCH_LIMIT = 200;
 
+// The fd lane has THREE outcomes, and the old seam carried them in a
+// two-valued `string | null`:
+//   - ok      — fd answered (its paths; an EMPTY list is a legitimate "no
+//               matches" answer — fd exits 1 for that).
+//   - failed  — fd could not answer (exit 2+, a bad dir, a spawn throw) →
+//               the built-in walk takes over.
+//   - aborted — the caller abandoned the search → NO results, and NO walk
+//               fallback (walking a tree for a superseded search burns CPU).
+// The old shape spelled "aborted" as the EMPTY STRING, which is exactly what
+// "no matches" looks like: a caller that forgot the case reported a silently
+// EMPTY result set. The outcome is now TAGGED, so the three cannot be
+// confused, and the consumer never has to re-read the signal to tell them
+// apart.
+export type FdOutcome = { ok: true; paths: string[] } | { ok: false; reason: "aborted" | "failed" };
+
 export type SearchOpts = {
   hidden?: boolean;
   limit?: number;
@@ -20,8 +35,9 @@ export type SearchOpts = {
   signal?: AbortSignal;
   // injectable for tests: null = no fd available (forces the walk)
   fdBin?: string | null;
-  // injectable fd runner; null return = fd failed (fall back to the walk)
-  runFd?: (bin: string, args: string[], cwd: string, signal?: AbortSignal) => Promise<string | null>;
+  // injectable fd runner; the outcome is TAGGED (an empty path list is "no
+  // matches", never "aborted")
+  runFd?: (bin: string, args: string[], cwd: string, signal?: AbortSignal) => Promise<FdOutcome>;
 };
 
 export const fdArgs = (query: string, hidden: boolean, limit: number): string[] => [
@@ -46,7 +62,20 @@ export const parseSearchPaths = (stdout: string): string[] =>
     .map((l) => l.trim())
     .filter(Boolean);
 
-const defaultRunFd = async (bin: string, args: string[], cwd: string, signal?: AbortSignal): Promise<string | null> => {
+// The lane's decision table, PURE (so it is testable without spawning fd):
+// the exit code + the abort state decide the outcome.
+//   - fd exits 1 on "no matches" — that is still a valid answer (NO fallback);
+//     2+ means a real error (bad dir, permission) and the walk should try.
+//   - an abort wins over the exit code: the caller abandoned the search, so
+//     its answer is void — reading it as "no matches" would be a silently
+//     empty result set.
+export const fdOutcomeFor = (code: number, stdout: string, aborted: boolean): FdOutcome => {
+  if (aborted) return { ok: false, reason: "aborted" };
+  if (code >= 2) return { ok: false, reason: "failed" };
+  return { ok: true, paths: parseSearchPaths(stdout) };
+};
+
+const defaultRunFd = async (bin: string, args: string[], cwd: string, signal?: AbortSignal): Promise<FdOutcome> => {
   try {
     const proc = Bun.spawn([bin, ...args], { cwd, stdout: "pipe", stderr: "ignore", stdin: "ignore" });
     let escalateTimer: ReturnType<typeof setTimeout> | null = null;
@@ -75,18 +104,15 @@ const defaultRunFd = async (bin: string, args: string[], cwd: string, signal?: A
       const out = new Response(proc.stdout).text();
       const code = await proc.exited;
       const text = await out;
-      // aborted = empty result, NOT a failure — null would trigger the walk
-      if (signal?.aborted) return "";
-      // fd exits 1 on "no matches" — that's still a valid answer (no fallback);
-      // 2+ means a real error (bad dir, permission) and the walk should try
-      if (code >= 2) return null;
-      return text;
+      // the 10s timeout kills the child WITHOUT aborting the signal → the
+      // killed exit code (>= 2) lands as "failed" and the walk takes over
+      return fdOutcomeFor(code, text, signal?.aborted === true);
     } finally {
       clearTimeout(timer);
       signal?.removeEventListener("abort", onAbort);
     }
   } catch {
-    return null;
+    return { ok: false, reason: "failed" };
   }
 };
 
@@ -130,8 +156,19 @@ export const searchTree = async (root: string, query: string, opts: SearchOpts =
   let paths: string[] | null = null;
   if (bin) {
     const out = await (opts.runFd ?? defaultRunFd)(bin, fdArgs(query, hidden, limit), root, opts.signal);
+    if (out.ok) {
+      // an empty list here is "no matches" — a valid answer, no fallback
+      paths = out.paths;
+    } else if (out.reason === "aborted") {
+      // an ABORTED search is not "no matches": it yields no results and does
+      // NOT fall back to the walk (the caller abandoned it — walking the tree
+      // would burn CPU on a superseded search)
+      return [];
+    }
+    // "failed" → paths stays null → the walk takes over
+    // the caller's own cancellation wins over ANY answer — the fd run may
+    // have completed just before the abort landed
     if (opts.signal?.aborted) return [];
-    if (out !== null) paths = parseSearchPaths(out);
   }
   if (paths === null) {
     paths = await walkTree(root, q, hidden, limit, opts.signal);
