@@ -1,5 +1,13 @@
 import { describe, expect, test } from "bun:test";
-import { appContentOpacity, backgroundClearColor, bootClearColor, rasterDimPlan, scrimPlan } from "./scrim";
+import {
+  backgroundClearColor,
+  bootClearColor,
+  contentPresentation,
+  modalVisibility,
+  rasterDimPlan,
+  revealVisibility,
+  scrimPlan,
+} from "./scrim";
 
 describe("bootClearColor", () => {
   test("the hidden boot paints the TERMINAL's bg (the intermediate frame is invisible)", () => {
@@ -37,23 +45,75 @@ describe("scrimPlan", () => {
   });
 });
 
-describe("appContentOpacity", () => {
-  const plan = { contentOpacity: 0.65, fill: false };
-
-  test("the boot-hidden app is fully transparent (the burst startup)", () => {
-    // The boot hides the app until the first frame is COMPLETE — the user
-    // must not watch a half-built app assemble itself (title, then sidebar,
-    // then the grid). Opacity is the only hide that keeps the layout alive.
-    expect(appContentOpacity({ bootHidden: true, modalOpen: false, plan })).toBe(0);
+describe("the content visibility phase", () => {
+  test("the boot's reveal dims the app only while a modal is up", () => {
+    expect(revealVisibility(false)).toBe("visible");
+    expect(revealVisibility(true)).toBe("dimmed");
   });
 
   test("a modal never un-hides the booting app", () => {
-    expect(appContentOpacity({ bootHidden: true, modalOpen: true, plan })).toBe(0);
+    // the boot hide wins as a WHOLE: the app is not on screen yet, so the
+    // modal's dim has nothing to dim
+    expect(modalVisibility("hidden-for-boot", true)).toBe("hidden-for-boot");
+    expect(modalVisibility("hidden-for-boot", false)).toBe("hidden-for-boot");
   });
 
-  test("a revealed app is opaque, or dimmed while a modal is up", () => {
-    expect(appContentOpacity({ bootHidden: false, modalOpen: false, plan })).toBe(1);
-    expect(appContentOpacity({ bootHidden: false, modalOpen: true, plan })).toBe(0.65);
+  test("a modal open dims the revealed app and its close restores it", () => {
+    expect(modalVisibility("visible", true)).toBe("dimmed");
+    expect(modalVisibility("dimmed", false)).toBe("visible");
+    expect(modalVisibility("dimmed", true)).toBe("dimmed");
+  });
+});
+
+describe("contentPresentation", () => {
+  test("the boot-hidden app paints NOTHING (the burst startup)", () => {
+    // The boot hides the app until its first frame is COMPLETE — the user
+    // must not watch a half-built app assemble itself (title, then sidebar,
+    // then the grid). Opacity is the only hide that keeps the layout alive.
+    // And nothing ELSE paints either: the scrim fill over an invisible app
+    // would show a tfm-colored screen instead of the terminal's background.
+    expect(contentPresentation("hidden-for-boot", "dim", 35)).toEqual({
+      opacity: 0,
+      fill: false,
+      raster: { opacity: null, shade: 1, bgShade: 1 },
+    });
+    expect(contentPresentation("hidden-for-boot", "fill", 35)).toEqual({
+      opacity: 0,
+      fill: false,
+      raster: { opacity: null, shade: 1, bgShade: 1 },
+    });
+  });
+
+  test("a visible app is opaque and paints no scrim", () => {
+    expect(contentPresentation("visible", "dim", 35)).toEqual({
+      opacity: 1,
+      fill: false,
+      raster: { opacity: null, shade: 1, bgShade: 1 },
+    });
+  });
+
+  test("a dimmed app fades the content and shades the rasters with it", () => {
+    expect(contentPresentation("dimmed", "dim", 35)).toEqual({
+      opacity: 0.65,
+      fill: false,
+      raster: { opacity: 1, shade: 0.65, bgShade: 1 },
+    });
+  });
+
+  test("a dimmed app in fill mode paints the overlay and shades the rasters", () => {
+    expect(contentPresentation("dimmed", "fill", 35)).toEqual({
+      opacity: 1,
+      fill: true,
+      raster: { opacity: 1, shade: 1 - 150 / 255, bgShade: 1 - 150 / 255 },
+    });
+  });
+
+  test("the none mode dims nothing, even with a modal up", () => {
+    expect(contentPresentation("dimmed", "none", 35)).toEqual({
+      opacity: 1,
+      fill: false,
+      raster: { opacity: null, shade: 1, bgShade: 1 },
+    });
   });
 });
 

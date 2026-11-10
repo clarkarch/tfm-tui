@@ -17,17 +17,38 @@ export type ScrimPlan = {
   fill: boolean;
 };
 
-// The app content node's opacity: ONE owner for the whole node, two factors.
-// - bootHidden: the boot paints the app in ONE burst — the content starts
-//   transparent and the boot reveals it once the first frame is COMPLETE, so
-//   the user never watches tfm assemble itself (title, then sidebar, then
-//   the grid, then the icons). `visible:false` would be display:none — the
-//   grid's viewport would collapse — so the hide rides the opacity.
-// - modalOpen: a modal dims the app behind it (the scrim plan).
-export const appContentOpacity = (opts: { bootHidden: boolean; modalOpen: boolean; plan: ScrimPlan }): number => {
-  if (opts.bootHidden) return 0;
-  return opts.modalOpen ? opts.plan.contentOpacity : 1;
-};
+// The app content's presentation: ONE state, ONE owner.
+//
+// Two facts used to paint the same screen: the boot's hide (the "burst"
+// startup — the content starts transparent and the boot reveals it once the
+// first frame is COMPLETE, so the user never watches tfm assemble itself)
+// and the modal's dim (a modal fades the app behind it). They were TWO
+// owners with TWO writers: the boot wrote the content's opacity, the modal
+// wrote the opacity AND the scrim fill AND the icon rasters' shade — so in
+// the overlap they disagreed, and a modal opened while the boot still hid
+// the app left the scrim FILL painting over an INVISIBLE app (the boot's
+// intermediate frame is meant to show the TERMINAL's background, not a
+// tfm-colored screen that fills in a beat later).
+//
+// ONE phase now owns the presentation, and the WHOLE presentation is
+// computed from it:
+//   "hidden-for-boot" — the app is not on screen yet: nothing paints (not
+//                      the content, not the scrim fill, and the rasters are
+//                      not re-rastered for a shade nobody can see).
+//   "dimmed"          — a modal is open: the content fades (or the fill
+//                      overlay paints) and the rasters darken with it.
+//   "visible"         — no modal: the content is fully opaque.
+export type ContentVisibility = "hidden-for-boot" | "dimmed" | "visible";
+
+// The boot's reveal: the boot hide is over, so a modal that is still open
+// dims the app that comes back.
+export const revealVisibility = (modalOpen: boolean): ContentVisibility => (modalOpen ? "dimmed" : "visible");
+
+// A modal open/close: the boot hide wins as a WHOLE — while the app is not
+// on screen the modal's dim has nothing to dim (and the scrim fill would
+// paint a screen the boot is still hiding).
+export const modalVisibility = (current: ContentVisibility, open: boolean): ContentVisibility =>
+  current === "hidden-for-boot" ? "hidden-for-boot" : open ? "dimmed" : "visible";
 
 // `fill` reproduces the old RGBA(0,0,0,150) overlay's darkening as a fixed
 // content fade (the overlay itself is gone: it deleted the rasters it covered).
@@ -77,6 +98,34 @@ export const rasterDimPlan = (mode: ScrimMode, contentOpacity: number): RasterDi
   if (mode === "fill") return { opacity: 1, shade: FILL_CONTENT_OPACITY, bgShade: FILL_CONTENT_OPACITY };
   const shade = Math.min(1, Math.max(0, contentOpacity));
   return { opacity: 1, shade, bgShade: 1 };
+};
+
+// The WHOLE presentation one phase paints: the content node's opacity, the
+// scrim fill's visibility and the icon rasters' shade. ONE function, so a
+// state can never paint half of itself (the old split wrote the opacity
+// from one owner and the fill + the shade from another).
+export type ContentPresentation = {
+  opacity: number;
+  fill: boolean;
+  raster: RasterDimPlan;
+};
+
+export const contentPresentation = (
+  visibility: ContentVisibility,
+  mode: ScrimMode,
+  dimPct: number,
+): ContentPresentation => {
+  const plan = scrimPlan(mode, dimPct);
+  if (visibility === "hidden-for-boot") {
+    // the app is not on screen: NOTHING paints — the content stays
+    // transparent, the scrim fill stays hidden, and the rasters are not
+    // re-rastered for a shade nobody can see
+    return { opacity: 0, fill: false, raster: { opacity: null, shade: 1, bgShade: 1 } };
+  }
+  if (visibility === "dimmed") {
+    return { opacity: plan.contentOpacity, fill: plan.fill, raster: rasterDimPlan(mode, plan.contentOpacity) };
+  }
+  return { opacity: 1, fill: false, raster: { opacity: null, shade: 1, bgShade: 1 } };
 };
 
 // The renderer clear color the app establishes: transparent-bg on/force under a

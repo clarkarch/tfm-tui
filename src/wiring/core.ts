@@ -19,7 +19,14 @@ import { isTrashFilesDir } from "../fs/fsutil";
 import { isCutKeyFor } from "../fs/clipboard";
 import { makeLookup, makeResolutionGate } from "../ui/ui-lookup";
 import { makePointerSetter, makeSlots } from "../ui/ui-slots";
-import { SCRIM_FILL_ID, appContentOpacity, rasterDimPlan, scrimPlan } from "../ui/scrim";
+import {
+  SCRIM_FILL_ID,
+  contentPresentation,
+  modalVisibility,
+  revealVisibility,
+  type ContentPresentation,
+  type ContentVisibility,
+} from "../ui/scrim";
 import { makeFloats } from "../ui/floats";
 import { initialAppState } from "../app/nav";
 import { appendLog } from "../lib/log";
@@ -166,6 +173,31 @@ export const wireCore = (deps: {
     setPointer,
   });
 
+  // The app content's presentation: ONE phase, ONE applier. The boot's hide
+  // and the modal's dim used to be TWO owners with TWO writers (the boot
+  // wrote the content's opacity; the modal wrote the opacity AND the scrim
+  // fill AND the rasters' shade), so they disagreed in the overlap — a modal
+  // opened while the boot still hid the app left the scrim FILL painting
+  // over an invisible app, and the boot's intermediate frame showed a
+  // tfm-colored screen instead of the terminal's background.
+  //
+  // The phase is the whole truth: "hidden-for-boot" (the app is not on
+  // screen yet), "dimmed" (a modal is open) or "visible". ONE function
+  // applies the WHOLE presentation it implies.
+  let contentVisibility: ContentVisibility = burstStartup ? "hidden-for-boot" : "visible";
+  const presentation = (): ContentPresentation =>
+    contentPresentation(contentVisibility, config.ui.scrimMode, config.ui.scrimDim);
+  const applyContentVisibility = (): void => {
+    try {
+      const p = presentation();
+      const content = lookup.byId("tfm-content");
+      if (content) content.opacity = p.opacity;
+      const fill = lookup.byId(SCRIM_FILL_ID);
+      if (fill) fill.visible = p.fill;
+      slots.setRasterDim(p.raster.opacity, p.raster.shade, p.raster.bgShade);
+    } catch {}
+  };
+
   // Dim the whole app behind a modal. `dim` fades the app-content node's
   // opacity; `fill` toggles the classic full-screen overlay node
   // (SCRIM_FILL_ID), whose box opts into the fork's fillDimsImages so the
@@ -174,43 +206,26 @@ export const wireCore = (deps: {
   // pixels shaded (rasterDimPlan), so they darken along with the text without
   // the translucent `icons = transparent` look.
   //
-  // The content node's opacity has TWO owners: this modal dim AND the boot's
-  // reveal (setBootHidden). With lazy startup OFF the app starts transparent
-  // so the FIRST painted frame is the complete app (the "burst" startup)
-  // instead of a title block that fills in a beat later. With lazy startup ON
-  // the app is never hidden (the progressive arrival is the feature).
-  let bootHidden = burstStartup;
+  // The boot's hide (the "burst" startup: the app is transparent until the
+  // first frame is complete) wins as a WHOLE — while it is on, the modal's
+  // dim has nothing to dim.
   const applyModalDim = (open: boolean): void => {
-    try {
-      const plan = scrimPlan(config.ui.scrimMode, config.ui.scrimDim);
-      const content = lookup.byId("tfm-content");
-      if (content) content.opacity = appContentOpacity({ bootHidden, modalOpen: open, plan });
-      const fill = lookup.byId(SCRIM_FILL_ID);
-      if (fill) fill.visible = open && plan.fill;
-      const rasters = open
-        ? rasterDimPlan(config.ui.scrimMode, plan.contentOpacity)
-        : { opacity: null, shade: 1, bgShade: 1 };
-      slots.setRasterDim(rasters.opacity, rasters.shade, rasters.bgShade);
-      // run on BOTH open and close: the widgets' reset also REPAINTS the
-      // sidebar (normalizePlaces), which is gated on the live modal state — so
-      // closing must repaint it back to the hover/kb highlight, and opening
-      // must drop it (the kb-focused row otherwise stayed highlighted).
-      runModalHooks();
-    } catch {}
+    contentVisibility = modalVisibility(contentVisibility, open);
+    applyContentVisibility();
+    // run on BOTH open and close: the widgets' reset also REPAINTS the
+    // sidebar (normalizePlaces), which is gated on the live modal state — so
+    // closing must repaint it back to the hover/kb highlight, and opening
+    // must drop it (the kb-focused row otherwise stayed highlighted).
+    runModalHooks();
   };
 
   // The boot's reveal: the app content goes from transparent to visible once
   // the first frame is COMPLETE (see wiring/io.ts runBootRender). A modal
-  // open at that moment still dims it — the boot hide and the modal dim are
-  // two factors of ONE opacity (appContentOpacity).
+  // open at that moment still dims it — the phase is ONE value and the
+  // reveal asks the floats layer whether a modal is up.
   const setBootHidden = (hidden: boolean): void => {
-    bootHidden = hidden;
-    try {
-      const plan = scrimPlan(config.ui.scrimMode, config.ui.scrimDim);
-      const content = lookup.byId("tfm-content");
-      if (!content) return;
-      content.opacity = appContentOpacity({ bootHidden, modalOpen: floats.hasModal(), plan });
-    } catch {}
+    contentVisibility = hidden ? "hidden-for-boot" : revealVisibility(floats.hasModal());
+    applyContentVisibility();
   };
 
   // --- Floating layers: THE single source of truth for which modal/cursor
@@ -298,6 +313,9 @@ export const wireCore = (deps: {
     // until the first frame is complete (the "burst" startup)
     burstStartup,
     setBootHidden,
+    // the content's opacity for the BUILD (the phase owns it — the boot
+    // hides the app by building the content transparent)
+    contentOpacity: () => presentation().opacity,
     // widgets that own transient hover state register a dropper here
     registerModalOpen,
     slots,

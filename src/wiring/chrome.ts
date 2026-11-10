@@ -312,7 +312,9 @@ export const wireChrome = async (deps: {
     // watches tfm assemble itself — the title + background first, then the
     // sidebar, then the grid, then the icons. With lazy startup ON the app
     // paints immediately (the progressive arrival IS the feature).
-    contentOpacity: core.burstStartup ? 0 : 1,
+    // The opacity comes from the core's PHASE (the boot hide is one state
+    // with the modal dim) — the build must not decide it on its own.
+    contentOpacity: core.contentOpacity(),
     title: buildTitle({ width: core.sideInnerW(), colors: core.colors, mode: core.config.ui.sidebarTitle }),
     toolbarShells: [toolbars[0].makeToolbarShell(), toolbars[1].makeToolbarShell()],
   });
