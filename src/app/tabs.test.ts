@@ -122,3 +122,86 @@ describe("makeTabs", () => {
     expect(tabs.active).toBe(1);
   });
 });
+
+// --- The tab model's ONE invariant: the list is NEVER empty and the active
+// index is always INSIDE it.
+//
+// The old clamp (`Math.min(Math.max(0, activeIdx), list.length - 1)`) yields
+// -1 for an EMPTY list: `list[-1]` is undefined, so `adoptTab` /
+// `syncTabFromState` silently no-op'd and the pane kept showing the PREVIOUS
+// folder while its tab strip showed none. The empty adopt is now a REFUSAL
+// (the model's own tab is the floor) and it is ANNOUNCED — a broken session
+// must not vanish silently.
+describe("the tab model's invariant", () => {
+  const withLog = () => {
+    const logs: string[] = [];
+    return { logs, log: (msg: string) => logs.push(msg) };
+  };
+
+  test("an empty adopt is REFUSED — the tab list is never empty", () => {
+    const state = mkState("/tmp/a");
+    const tabs = makeTabs(state, silentHooks());
+    tabs.adoptTabs([], 0);
+    // the old shape emptied the list and clamped the active index to -1
+    expect(tabs.list.length).toBe(1);
+    expect(tabs.active).toBe(0);
+    // and the pane keeps the folder it had (not a stale one)
+    expect(state.history).toEqual(["/tmp/a"]);
+  });
+
+  test("the refusal is ANNOUNCED — a broken session does not vanish silently", () => {
+    const { logs, log } = withLog();
+    const tabs = makeTabs(mkState("/tmp/a"), silentHooks(), log);
+    tabs.adoptTabs([], 0);
+    expect(logs).toHaveLength(1);
+    // the announcement names the REFUSAL — not some other trace
+    expect(logs[0]).toContain("empty");
+  });
+
+  test("adopting the model's OWN list does not empty it", () => {
+    const tabs = makeTabs(mkState("/tmp/a"), silentHooks());
+    tabs.newTab("/tmp/b"); // two tabs
+    // the adopt clears the list before filling it — adopting the list
+    // itself would clear the very array it is filling
+    tabs.adoptTabs(tabs.list, 0);
+    expect(tabs.list.length).toBe(2);
+    expect(tabs.active).toBe(0);
+  });
+
+  test("the active index stays inside the list through every operation", () => {
+    const tabs = makeTabs(mkState("/tmp/a"), silentHooks());
+    const inRange = (): boolean => tabs.active >= 0 && tabs.active < tabs.list.length;
+    expect(inRange()).toBe(true);
+    tabs.newTab("/tmp/b");
+    expect(inRange()).toBe(true);
+    tabs.newTab("/tmp/c");
+    expect(inRange()).toBe(true);
+    tabs.switchTab(0);
+    expect(inRange()).toBe(true);
+    tabs.closeTab(1); // close a tab AFTER the active one
+    expect(inRange()).toBe(true);
+    tabs.closeTab(0); // close the active one
+    expect(inRange()).toBe(true);
+    tabs.adoptTabs(
+      [
+        { history: ["/tmp/x"], histIdx: 0 },
+        { history: ["/tmp/y"], histIdx: 0 },
+        { history: ["/tmp/z"], histIdx: 0 },
+      ],
+      99,
+    );
+    expect(inRange()).toBe(true);
+    expect(tabs.active).toBe(2);
+  });
+
+  test("a missing active tab is ANNOUNCED, not silently ignored", () => {
+    const { logs, log } = withLog();
+    const tabs = makeTabs(mkState("/tmp/a"), silentHooks(), log);
+    // the list is exposed by reference (the session saver holds it), so an
+    // outside mutation can break the invariant — that must be said, not
+    // swallowed
+    tabs.list.length = 0;
+    tabs.syncTabFromState();
+    expect(logs).toHaveLength(1);
+  });
+});
