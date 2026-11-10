@@ -36,7 +36,11 @@ import {
   selectArchiveLane,
   tarSupportsByteProgress,
   uniqueArchiveTarget,
+  type ArchiveBinary,
+  type ArchiveFormat,
   type ArchiveRun,
+  type CompressionFormat,
+  type MemberLineSemantics,
 } from "./archive";
 
 // Fake child mirroring the Bun Subprocess surface runArchiveTool consumes:
@@ -135,10 +139,14 @@ describe("extractPlan", () => {
   test("tar carries -v (progress) and the filter (auto-detect is not enough for -I lz4/brotli)", () => {
     expect(extractPlan("tar.gz", "/x/a.tar.gz", "/stage", which("tar", "gzip"))).toEqual({
       tool: "tar",
+      memberTool: "tar",
+      memberLine: "started",
       args: ["-x", "-v", "-z", "-f", "/x/a.tar.gz", "-C", "/stage", "--no-same-owner"],
     });
     expect(extractPlan("tar.lz4", "/x/a.tar.lz4", "/stage", which("tar", "lz4"))).toEqual({
       tool: "tar",
+      memberTool: "tar",
+      memberLine: "started",
       args: ["-x", "-v", "-I", "lz4", "-f", "/x/a.tar.lz4", "-C", "/stage", "--no-same-owner"],
     });
     expect(extractPlan("tar", "/x/a.tar", "/stage", which("tar")).args).not.toContain("-z");
@@ -147,10 +155,14 @@ describe("extractPlan", () => {
   test("zip uses unzip when present, 7z otherwise", () => {
     expect(extractPlan("zip", "/x/a.zip", "/stage", which("unzip"))).toEqual({
       tool: "unzip",
+      memberTool: "unzip",
+      memberLine: "done",
       args: ["-o", "/x/a.zip", "-d", "/stage"],
     });
     expect(extractPlan("zip", "/x/a.zip", "/stage", which("7z"))).toEqual({
       tool: "7z",
+      memberTool: "7z",
+      memberLine: "started",
       args: ["x", "-bb1", "-bso2", "-y", "-o/stage", "/x/a.zip"],
     });
   });
@@ -158,6 +170,8 @@ describe("extractPlan", () => {
   test("7z extracts via 7z", () => {
     expect(extractPlan("7z", "/x/a.7z", "/stage", which("7z"))).toEqual({
       tool: "7z",
+      memberTool: "7z",
+      memberLine: "started",
       args: ["x", "-bb1", "-bso2", "-y", "-o/stage", "/x/a.7z"],
     });
   });
@@ -165,6 +179,8 @@ describe("extractPlan", () => {
   test("rar extracts via 7z (read-only format)", () => {
     expect(extractPlan("rar", "/x/a.rar", "/stage", which("7z"))).toEqual({
       tool: "7z",
+      memberTool: "7z",
+      memberLine: "started",
       args: ["x", "-bb1", "-bso2", "-y", "-o/stage", "/x/a.rar"],
     });
   });
@@ -198,10 +214,15 @@ describe("extractPlan", () => {
     // without it the plain spec runs (today's end-batched behavior, not a failure)
     expect(compressPlan("zip", "/o/a.zip", ["f"], "/src", which("zip", "stdbuf"))).toEqual({
       tool: "stdbuf",
+      // the shim only unbuffers the stream — the member lines come from zip
+      memberTool: "zip",
+      memberLine: "done",
       args: ["-o0", "-e0", "zip", "-r", "/o/a.zip", "f"],
     });
     expect(compressPlan("zip", "/o/a.zip", ["f"], "/src", which("zip"))).toEqual({
       tool: "zip",
+      memberTool: "zip",
+      memberLine: "done",
       args: ["-r", "/o/a.zip", "f"],
     });
   });
@@ -211,6 +232,8 @@ describe("compressPlan / compressionExt / compressionHint", () => {
   test("tar stores names relative to the common parent", () => {
     expect(compressPlan("tar.gz", "/out/a.tar.gz", ["foo", "bar"], "/src", which("tar", "gzip"))).toEqual({
       tool: "tar",
+      memberTool: "tar",
+      memberLine: "started",
       args: ["-c", "-z", "-v", "-f", "/out/a.tar.gz", "-C", "/src", "--", "foo", "bar"],
     });
     expect(compressPlan("tar.zst", "/out/a.tar.zst", ["foo"], "/src").args.slice(0, 4)).toEqual([
@@ -228,10 +251,14 @@ describe("compressPlan / compressionExt / compressionHint", () => {
     expect(compressPlan("tar.gz", "/o/a.tar.gz", ["-v"], "/src", which("tar", "gzip")).args.at(-2)).toBe("--");
     expect(compressPlan("zip", "/o/a.zip", ["-v"], "/src", which("zip"))).toEqual({
       tool: "zip",
+      memberTool: "zip",
+      memberLine: "done",
       args: ["-r", "/o/a.zip", "./-v"],
     });
     expect(compressPlan("zip", "/o/a.zip", ["-v"], "/src", which("7z"))).toEqual({
       tool: "7z",
+      memberTool: "7z",
+      memberLine: "started",
       args: ["a", "-bb1", "-bso2", "-tzip", "-y", "/o/a.zip", "--", "./-v"],
     });
   });
@@ -239,14 +266,20 @@ describe("compressPlan / compressionExt / compressionHint", () => {
   test("zip uses zip when present, 7z otherwise; 7z is 7z", () => {
     expect(compressPlan("zip", "/out/a.zip", ["foo"], "/src", which("zip"))).toEqual({
       tool: "zip",
+      memberTool: "zip",
+      memberLine: "done",
       args: ["-r", "/out/a.zip", "foo"],
     });
     expect(compressPlan("zip", "/out/a.zip", ["foo"], "/src", which("7z"))).toEqual({
       tool: "7z",
+      memberTool: "7z",
+      memberLine: "started",
       args: ["a", "-bb1", "-bso2", "-tzip", "-y", "/out/a.zip", "--", "foo"],
     });
     expect(compressPlan("7z", "/out/a.7z", ["foo"], "/src", which("7z"))).toEqual({
       tool: "7z",
+      memberTool: "7z",
+      memberLine: "started",
       args: ["a", "-bb1", "-bso2", "-t7z", "-y", "/out/a.7z", "--", "foo"],
     });
   });
@@ -673,6 +706,68 @@ describe("member accounting", () => {
       { run: tarRun(["  inflating: /stage/a  "]), which: which("unzip"), onMemberDone: (n) => counts.push(n) },
     );
     expect(counts).toEqual([1]);
+  });
+
+  test("the stdbuf-wrapped zip lane counts members as they finish (the shim writes no member line)", async () => {
+    // the shim only unbuffers the stream — the member lines still come from
+    // zip, so the count must not inherit the wrapper's (unknown) name
+    const counts: number[] = [];
+    await runArchiveTask(
+      { op: "compress", fmt: "zip", outFile: "/out/a.zip", names: ["a"], parent: "/src" },
+      { run: tarRun(["adding: a (deflated 63%)"]), which: which("zip", "stdbuf"), onMemberDone: (n) => counts.push(n) },
+    );
+    expect(counts).toEqual([1]);
+  });
+});
+
+// --- the member-line rule lives in the format table -------------------------
+// WHEN a tool's member line completes differs per BINARY: tar/7z print the
+// name when the member STARTS (so the count must lag by one), while unzip and
+// Info-ZIP zip terminate the line when the member ENDS. The rule used to be a
+// loose map keyed by binary name, so a new binary silently inherited the
+// wrong rule — and the bar read 100% while members were still in flight.
+// Every format row now declares the semantics of the binaries its plans can
+// run, and the plan carries that declaration with it.
+describe("member-line semantics", () => {
+  const everyTool = (bin: string): string => `/usr/bin/${bin}`;
+  const sevenZipOnly = which("7z");
+
+  test("every compression row declares the semantics of each binary its plans can use", async () => {
+    const mod = (await import("./archive")) as unknown as {
+      memberLineDeclarations?: () => Array<{
+        fmt: ArchiveFormat;
+        memberLine: Partial<Record<ArchiveBinary, MemberLineSemantics>>;
+      }>;
+    };
+    expect(typeof mod.memberLineDeclarations).toBe("function");
+    const declarations = mod.memberLineDeclarations?.() ?? [];
+    expect(declarations.length).toBeGreaterThan(0);
+    // rar is read-only (7z cannot create it) — only the other rows compress
+    const compressible = new Set<ArchiveFormat>(availableCompressionFormats(everyTool));
+    // one binary has ONE semantics: the rule is a property of the binary, so
+    // two rows may not disagree about it
+    const globalSemantics = new Map<ArchiveBinary, MemberLineSemantics>();
+    for (const row of declarations) {
+      const declared = row.memberLine;
+      const specs = [
+        extractPlan(row.fmt, "/x/a", "/stage", everyTool),
+        extractPlan(row.fmt, "/x/a", "/stage", sevenZipOnly),
+      ];
+      if (compressible.has(row.fmt)) {
+        specs.push(compressPlan(row.fmt as CompressionFormat, "/out/a", ["a"], "/src", everyTool));
+        specs.push(compressPlan(row.fmt as CompressionFormat, "/out/a", ["a"], "/src", sevenZipOnly));
+      }
+      for (const spec of specs) {
+        // the row declares the binary the plan runs …
+        const sem = declared[spec.memberTool];
+        if (sem === undefined) throw new Error(`${row.fmt} declares no member-line semantics for ${spec.memberTool}`);
+        // … and the plan carries exactly that declaration
+        expect(spec.memberLine).toBe(sem);
+        const seen = globalSemantics.get(spec.memberTool);
+        if (seen === undefined) globalSemantics.set(spec.memberTool, spec.memberLine);
+        else expect(spec.memberLine).toBe(seen);
+      }
+    }
   });
 });
 

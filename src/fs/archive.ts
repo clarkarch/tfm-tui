@@ -33,6 +33,19 @@ export type ArchiveFormat =
 // formats we can create (a subset of ArchiveFormat: rar is read-only)
 export type CompressionFormat = Exclude<ArchiveFormat, "rar">;
 export type ToolSpec = { tool: string; args: string[] };
+// WHEN a tool's member line completes: "started" = the line lands when the
+// member STARTS (tar/7z — the count must lag by one), "done" = when the
+// member ENDS (unzip/Info-ZIP zip).
+export type MemberLineSemantics = "started" | "done";
+// the binaries that WRITE member lines (the stdbuf shim is only a buffering
+// wrapper around the real tool — it is never the producer)
+export type ArchiveBinary = "tar" | "7z" | "zip" | "unzip";
+// a plan that PRINTS member lines: it carries the binary that writes them and
+// WHEN its line completes, so the counter never guesses from a tool name
+export type MemberToolSpec = ToolSpec & {
+  memberTool: ArchiveBinary;
+  memberLine: MemberLineSemantics;
+};
 export type ArchiveRunResult = { code: number; stdout: string; stderr: string };
 export type ArchiveRunOpts = {
   cwd?: string;
@@ -40,9 +53,10 @@ export type ArchiveRunOpts = {
   // tar -v and unzip write entry names to stdout, 7z -bso2 to stderr)
   onLine?: (line: string) => void;
   // the number of FINISHED members (the archive layer owns the per-tool
-  // semantics — see MEMBER_LINE_MEANS_STARTED: tar/7z print the name when
-  // the member STARTS, so their count lags by one member; that lag is what
-  // keeps the bar from reading as complete before the op is)
+  // semantics — the format table declares WHEN each binary's member line
+  // completes, and the plan carries it: tar/7z print the name when the member
+  // STARTS, so their count lags by one member; that lag is what keeps the bar
+  // from reading as complete before the op is)
   onMemberDone?: (finished: number) => void;
   // live byte progress (the tar family's --checkpoint counter): the bytes
   // the tool has consumed so far
@@ -151,16 +165,19 @@ export const compressByteProgress = (
 //   the js lanes  → an entry after writing it → DONE
 // The bar counts FINISHED members, so a "starts" lane lags by one member
 // (the last one is still in flight when the tool exits).
-const MEMBER_LINE_MEANS_STARTED: Record<string, boolean> = {
-  tar: true,
-  "7z": true,
-};
+// The rule itself lives in the format table (CompressionDef.memberLine): a
+// loose map keyed by binary name let a NEW binary silently inherit the wrong
+// rule, and the bar read 100% while members were still in flight.
 
 type CompressionDef = {
   fmt: ArchiveFormat;
   ext: string;
   hint: string;
   kind: "tar" | "zip" | "7z";
+  // WHEN each binary this format's plans can run completes its member line.
+  // Required on every row: adding a format forces a decision, and a plan that
+  // runs an undeclared binary throws instead of guessing (memberLineFor).
+  memberLine: Partial<Record<ArchiveBinary, MemberLineSemantics>>;
   // tar argv filter used for create AND extract AND list (GNU tar needs it on
   // extract for -I filters — lz4/brotli are not auto-detected)
   filter: string[];
@@ -168,23 +185,124 @@ type CompressionDef = {
 };
 
 // picker order: most common first
+// memberLine: WHEN the member line of each binary this format's plans can run
+// completes — "started" = the line lands when the member STARTS (tar/7z, so
+// the count lags by one), "done" = when it ENDS (unzip/Info-ZIP zip).
 const COMPRESSIONS: CompressionDef[] = [
-  { fmt: "tar.gz", ext: ".tar.gz", hint: "gzip", kind: "tar", filter: ["-z"], need: ["tar", "gzip"] },
-  { fmt: "zip", ext: ".zip", hint: "zip", kind: "zip", filter: [], need: [] },
-  { fmt: "7z", ext: ".7z", hint: "7z", kind: "7z", filter: [], need: ["7z"] },
-  { fmt: "tar", ext: ".tar", hint: "tar (no compression)", kind: "tar", filter: [], need: ["tar"] },
-  { fmt: "tar.xz", ext: ".tar.xz", hint: "xz", kind: "tar", filter: ["-J"], need: ["tar", "xz"] },
-  { fmt: "tar.bz2", ext: ".tar.bz2", hint: "bzip2", kind: "tar", filter: ["-j"], need: ["tar", "bzip2"] },
-  { fmt: "tar.zst", ext: ".tar.zst", hint: "zstd", kind: "tar", filter: ["--zstd"], need: ["tar", "zstd"] },
-  { fmt: "tar.lzma", ext: ".tar.lzma", hint: "lzma", kind: "tar", filter: ["--lzma"], need: ["tar", "lzma"] },
-  { fmt: "tar.lz4", ext: ".tar.lz4", hint: "lz4", kind: "tar", filter: ["-I", "lz4"], need: ["tar", "lz4"] },
-  { fmt: "tar.br", ext: ".tar.br", hint: "brotli", kind: "tar", filter: ["-I", "brotli"], need: ["tar", "brotli"] },
-  { fmt: "tar.lz", ext: ".tar.lz", hint: "lzip", kind: "tar", filter: ["--lzip"], need: ["tar", "lzip"] },
-  { fmt: "tar.lzo", ext: ".tar.lzo", hint: "lzop", kind: "tar", filter: ["--lzop"], need: ["tar", "lzop"] },
-  { fmt: "tar.Z", ext: ".tar.Z", hint: "compress", kind: "tar", filter: ["-Z"], need: ["tar", "compress"] },
+  {
+    fmt: "tar.gz",
+    ext: ".tar.gz",
+    hint: "gzip",
+    kind: "tar",
+    filter: ["-z"],
+    need: ["tar", "gzip"],
+    memberLine: { tar: "started" },
+  },
+  {
+    fmt: "zip",
+    ext: ".zip",
+    hint: "zip",
+    kind: "zip",
+    filter: [],
+    need: [],
+    // zip arrives via three binaries: Info-ZIP zip/unzip terminate the member
+    // line when the member ENDS, 7z prints it when the member STARTS
+    memberLine: { zip: "done", unzip: "done", "7z": "started" },
+  },
+  { fmt: "7z", ext: ".7z", hint: "7z", kind: "7z", filter: [], need: ["7z"], memberLine: { "7z": "started" } },
+  {
+    fmt: "tar",
+    ext: ".tar",
+    hint: "tar (no compression)",
+    kind: "tar",
+    filter: [],
+    need: ["tar"],
+    memberLine: { tar: "started" },
+  },
+  {
+    fmt: "tar.xz",
+    ext: ".tar.xz",
+    hint: "xz",
+    kind: "tar",
+    filter: ["-J"],
+    need: ["tar", "xz"],
+    memberLine: { tar: "started" },
+  },
+  {
+    fmt: "tar.bz2",
+    ext: ".tar.bz2",
+    hint: "bzip2",
+    kind: "tar",
+    filter: ["-j"],
+    need: ["tar", "bzip2"],
+    memberLine: { tar: "started" },
+  },
+  {
+    fmt: "tar.zst",
+    ext: ".tar.zst",
+    hint: "zstd",
+    kind: "tar",
+    filter: ["--zstd"],
+    need: ["tar", "zstd"],
+    memberLine: { tar: "started" },
+  },
+  {
+    fmt: "tar.lzma",
+    ext: ".tar.lzma",
+    hint: "lzma",
+    kind: "tar",
+    filter: ["--lzma"],
+    need: ["tar", "lzma"],
+    memberLine: { tar: "started" },
+  },
+  {
+    fmt: "tar.lz4",
+    ext: ".tar.lz4",
+    hint: "lz4",
+    kind: "tar",
+    filter: ["-I", "lz4"],
+    need: ["tar", "lz4"],
+    memberLine: { tar: "started" },
+  },
+  {
+    fmt: "tar.br",
+    ext: ".tar.br",
+    hint: "brotli",
+    kind: "tar",
+    filter: ["-I", "brotli"],
+    need: ["tar", "brotli"],
+    memberLine: { tar: "started" },
+  },
+  {
+    fmt: "tar.lz",
+    ext: ".tar.lz",
+    hint: "lzip",
+    kind: "tar",
+    filter: ["--lzip"],
+    need: ["tar", "lzip"],
+    memberLine: { tar: "started" },
+  },
+  {
+    fmt: "tar.lzo",
+    ext: ".tar.lzo",
+    hint: "lzop",
+    kind: "tar",
+    filter: ["--lzop"],
+    need: ["tar", "lzop"],
+    memberLine: { tar: "started" },
+  },
+  {
+    fmt: "tar.Z",
+    ext: ".tar.Z",
+    hint: "compress",
+    kind: "tar",
+    filter: ["-Z"],
+    need: ["tar", "compress"],
+    memberLine: { tar: "started" },
+  },
   // read-only: 7z decodes rar (Rar1-5) but cannot create it, so it never
   // appears in availableCompressionFormats (the picker)
-  { fmt: "rar", ext: ".rar", hint: "7z", kind: "7z", filter: [], need: ["7z"] },
+  { fmt: "rar", ext: ".rar", hint: "7z", kind: "7z", filter: [], need: ["7z"], memberLine: { "7z": "started" } },
 ];
 
 const DEF = new Map<ArchiveFormat, CompressionDef>(COMPRESSIONS.map((d) => [d.fmt, d]));
@@ -197,6 +315,23 @@ const defOf = (fmt: ArchiveFormat): CompressionDef => {
   if (!d) throw new Error(`archive: no definition for format ${fmt}`);
   return d;
 };
+
+// the member-line rule of a format row. A plan that runs a binary the row
+// does not declare THROWS — a missing declaration must never fall back to a
+// guess (that guess is what made a new binary read as "members are done"
+// while they were still in flight).
+const memberLineFor = (fmt: ArchiveFormat, binary: ArchiveBinary): MemberLineSemantics => {
+  const sem = defOf(fmt).memberLine[binary];
+  if (!sem) throw new Error(`archive: ${fmt} declares no member-line semantics for ${binary}`);
+  return sem;
+};
+
+// the per-format declarations (the table's own view of the rule): every row
+// declares the semantics of each binary its plans can run
+export const memberLineDeclarations = (): ReadonlyArray<{
+  fmt: ArchiveFormat;
+  memberLine: Readonly<Partial<Record<ArchiveBinary, MemberLineSemantics>>>;
+}> => COMPRESSIONS.map((d) => ({ fmt: d.fmt, memberLine: { ...d.memberLine } }));
 
 // longest suffixes first: `.tar.lzma` must beat `.tar.lz`, `.tar.zst` beat
 // `.tar.z`; the bare single-stream extensions are intentionally absent
@@ -254,7 +389,7 @@ export const extractPlan = (
   destDir: string,
   which: WhichFn = whichLive,
   opts?: { byteProgress?: boolean },
-): ToolSpec => {
+): MemberToolSpec => {
   const def = defOf(fmt);
   if (def.kind === "tar")
     // -v: emit entry names so the file-count progress bar advances
@@ -263,6 +398,8 @@ export const extractPlan = (
     // the escape snapshot below catches any tool that doesn't)
     return {
       tool: "tar",
+      memberTool: "tar",
+      memberLine: memberLineFor(fmt, "tar"),
       args: [
         ...(opts?.byteProgress ? TAR_BYTE_FLAGS : []),
         "-x",
@@ -280,10 +417,26 @@ export const extractPlan = (
   // -bso2: the entry log goes to stderr (unbuffered) — 7z block-buffers piped
   // stdout, so without it every line arrives at exit and the bar sits at 0/N
   // then jumps to done (probed; tar -v and unzip flush per entry and need nothing)
-  if (def.kind === "7z") return { tool: "7z", args: ["x", "-bb1", "-bso2", "-y", `-o${destDir}`, file] };
-  return zipExtractTool(which) === "unzip"
-    ? { tool: "unzip", args: ["-o", file, "-d", destDir] }
-    : { tool: "7z", args: ["x", "-bb1", "-bso2", "-y", `-o${destDir}`, file] };
+  if (def.kind === "7z")
+    return {
+      tool: "7z",
+      memberTool: "7z",
+      memberLine: memberLineFor(fmt, "7z"),
+      args: ["x", "-bb1", "-bso2", "-y", `-o${destDir}`, file],
+    };
+  if (zipExtractTool(which) === "unzip")
+    return {
+      tool: "unzip",
+      memberTool: "unzip",
+      memberLine: memberLineFor(fmt, "unzip"),
+      args: ["-o", file, "-d", destDir],
+    };
+  return {
+    tool: "7z",
+    memberTool: "7z",
+    memberLine: memberLineFor(fmt, "7z"),
+    args: ["x", "-bb1", "-bso2", "-y", `-o${destDir}`, file],
+  };
 };
 
 export const listArgs = (fmt: ArchiveFormat, file: string, which: WhichFn = whichLive): string[] => {
@@ -305,13 +458,15 @@ export const compressPlan = (
   parent: string,
   which: WhichFn = whichLive,
   opts?: { byteProgress?: boolean },
-): ToolSpec => {
+): MemberToolSpec => {
   const def = defOf(fmt);
   // a name starting with "-" would otherwise be parsed as an option (tar -v,
   // --files-from=…): tar/7z get an explicit `--`, zip an escaped "./" operand
   if (def.kind === "tar")
     return {
       tool: "tar",
+      memberTool: "tar",
+      memberLine: memberLineFor(fmt, "tar"),
       args: [
         ...(opts?.byteProgress ? TAR_BYTE_FLAGS : []),
         "-c",
@@ -328,7 +483,13 @@ export const compressPlan = (
   // -bb1: one `+ name` line per added file — `zip -r` is chatty by default
   // but 7z is not, and without it the file-count bar never advances.
   // -bso2: same piped-stdout freeze as extract (entry log to stderr, live).
-  if (def.kind === "7z") return { tool: "7z", args: ["a", "-bb1", "-bso2", "-t7z", "-y", outFile, "--", ...names] };
+  if (def.kind === "7z")
+    return {
+      tool: "7z",
+      memberTool: "7z",
+      memberLine: memberLineFor(fmt, "7z"),
+      args: ["a", "-bb1", "-bso2", "-t7z", "-y", outFile, "--", ...names],
+    };
   const zipNames = names.map((n) => (n.startsWith("-") ? `./${n}` : n));
   if (zipCreateTool(which) === "zip") {
     const args = ["-r", outFile, ...zipNames];
@@ -336,9 +497,28 @@ export const compressPlan = (
     // end-batched freeze 7z needed -bso2 for) — unwrap with stdbuf when present
     // (LD_PRELOAD failure still runs the command, so worst case is today's
     // behavior). Without stdbuf the plain spec runs: degraded, never failed.
-    return which("stdbuf") ? { tool: "stdbuf", args: ["-o0", "-e0", "zip", ...args] } : { tool: "zip", args };
+    // The stdbuf shim only unbuffers the stream: the MEMBER LINES still come
+    // from zip, so the declaration travels with the wrapped binary.
+    return which("stdbuf")
+      ? {
+          tool: "stdbuf",
+          memberTool: "zip",
+          memberLine: memberLineFor(fmt, "zip"),
+          args: ["-o0", "-e0", "zip", ...args],
+        }
+      : {
+          tool: "zip",
+          memberTool: "zip",
+          memberLine: memberLineFor(fmt, "zip"),
+          args,
+        };
   }
-  return { tool: "7z", args: ["a", "-bb1", "-bso2", "-tzip", "-y", outFile, "--", ...zipNames] };
+  return {
+    tool: "7z",
+    memberTool: "7z",
+    memberLine: memberLineFor(fmt, "7z"),
+    args: ["a", "-bb1", "-bso2", "-tzip", "-y", outFile, "--", ...zipNames],
+  };
 };
 
 export const availableCompressionFormats = (which: WhichFn = whichLive): CompressionFormat[] =>
@@ -1135,11 +1315,12 @@ export const runArchiveTask: ArchiveTaskRun = async (task, opts = {}) => {
         : compressPlan(task.fmt, task.outFile, task.names, task.parent, which, { byteProgress: task.byteProgress });
     // count entry lines only — the raw tool log carries banners/summaries that
     // would otherwise advance the file-count bar (isArchiveEntryLine).
-    // The COUNT is of FINISHED members: tar/7z print the name when the member
-    // STARTS, so their last member is still in flight — the bar may never
+    // The COUNT is of FINISHED members: the plan carries WHEN its member line
+    // completes (the format table owns the rule), so tar/7z — which print the
+    // name when the member STARTS — lag by one member and the bar may never
     // read as complete before the op really is.
     const inner = opts.onLine;
-    const startedMeansInFlight = MEMBER_LINE_MEANS_STARTED[spec.tool] === true;
+    const startedMeansInFlight = spec.memberLine === "started";
     let started = 0;
     const onLine =
       inner || opts.onMemberDone
@@ -1159,7 +1340,9 @@ export const runArchiveTask: ArchiveTaskRun = async (task, opts = {}) => {
     // also surfaces as code -1).
     if (spec.tool === "stdbuf" && res.code === -1 && !opts.isCancelled?.()) {
       const tool = spec.args[2];
-      if (tool) return run({ tool, args: spec.args.slice(3) }, { ...opts, onLine });
+      // the retry runs the WRAPPED binary: it keeps the plan's member-line
+      // declaration (the shim never wrote a member line itself)
+      if (tool) return run({ ...spec, tool, args: spec.args.slice(3) }, { ...opts, onLine });
     }
     return res;
   }
