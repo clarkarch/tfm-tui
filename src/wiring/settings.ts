@@ -30,7 +30,7 @@ import {
   type FileManagerConfirmItem,
 } from "../fs/default-filemanager";
 import { installFileManagerService, resolveServiceExec } from "../app/filemanager-service";
-import { pointPaneAt } from "../app/panes";
+import { paneNormalizeAction, pointPaneAt } from "../app/panes";
 import { installPlugin, removePluginDir, updatePlugin } from "../plugins/plugin-install";
 import { makePluginOps } from "./plugin-ops";
 import { pluginsDir } from "../plugins/plugins";
@@ -369,7 +369,6 @@ export const wireRetheme = (deps: {
     { isOpen: () => fileops.progress.isOpen(), repaint: () => fileops.progress.repaint() },
   ];
 
-  let lastDual = core.config.ui.dualPane;
   const retheme = makeRetheme({
     config: core.config,
     colors: core.colors,
@@ -443,17 +442,28 @@ export const wireRetheme = (deps: {
         });
       } catch {}
     },
-    normalizePanes: () => {
-      const dual = core.config.ui.dualPane;
-      if (!dual && core.panes.active !== 0) {
+    normalizePanes: (prev: boolean, next: boolean) => {
+      // The decision is PURE (src/app/panes.ts): the off→on edge is a fact
+      // about the TRANSITION, computed from the applied PAIR. The previous
+      // value comes from the retheme module's `seen` record (the one owner
+      // of every "last seen" fact) — no shadow field here that a throwing
+      // hook could leave stale.
+      const action = paneNormalizeAction({
+        prev,
+        next,
+        active: core.panes.active,
+        activeCwd: core.state.cwd,
+      });
+      if (action.kind === "activate-first") {
+        // dual pane turned off: a hidden pane must never own input/status
         core.setActivePane(0);
         core.refreshPaneFocus();
+      } else if (action.kind === "point-hidden-at") {
+        // dual pane just turned on: the hidden pane's cwd is stale from boot —
+        // open it at the active pane's current directory (both the keybind and
+        // the settings GUI row funnel through applyConfig, so one hook covers all)
+        pointPaneAt(core.panes.states[1], action.dir);
       }
-      // dual pane just turned on: the hidden pane's cwd is stale from boot —
-      // open it at the active pane's current directory (both the keybind and
-      // the settings GUI row funnel through applyConfig, so one hook covers all)
-      else if (dual && !lastDual) pointPaneAt(core.panes.states[1], core.state.cwd);
-      lastDual = dual;
     },
     // the grid reads per-pane AppState.sortBy, not config: converge both panes
     // onto [ui] sort-mode here so a settings/live-reload change re-sorts (same

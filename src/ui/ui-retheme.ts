@@ -60,8 +60,12 @@ type RethemeCtx = {
   // Runs at the end of every applyConfig — optional so tests stay light.
   onConfigApplied?(): void;
   // dual pane: re-clamp the active pane when dual is disabled (a hidden pane
-  // must never own input/status) and repaint the focus cue.
-  normalizePanes?(): void;
+  // must never own input/status), point the hidden pane at the active cwd
+  // when dual just turned ON, and repaint the focus cue. The hook receives
+  // the applied PAIR (previous → next): the off→on edge is a fact about the
+  // transition, and the previous value lives in the `seen` record below (the
+  // one owner of every "last seen" fact).
+  normalizePanes?(prev: boolean, next: boolean): void;
   // sort mode: [ui] sort-mode seeds per-pane AppState at boot, but the grid
   // reads state — the wiring hook converges both panes here so a settings /
   // live-reload change actually re-sorts. Optional so tests stay light.
@@ -268,11 +272,20 @@ export const makeRetheme = (ctx: RethemeCtx) => {
     // conflict set of the last scan — the reload toast fires once per CHANGE,
     // not per reload (a lingering file conflict must not nag on every save)
     conflictSig: JSON.stringify(findKeybindConflicts(ctx.config)),
+    // the last APPLIED dual-pane value: the off→on edge is a fact about the
+    // TRANSITION, so the previous value is captured BEFORE the config assign
+    // and written back BEFORE the hook runs — a hook that throws must not
+    // make the edge fire again on the next apply.
+    dualPane: ctx.config.ui.dualPane,
   };
 
   const applyConfig = (fresh: Config): void => {
     const themeChanged = seen.themeSig !== themeSig(fresh);
+    // the dual-pane edge: the PREVIOUSLY APPLIED value, captured before the
+    // assign (the current config is about to become the next value)
+    const prevDual = seen.dualPane;
     Object.assign(ctx.config.ui, fresh.ui);
+    seen.dualPane = ctx.config.ui.dualPane;
     Object.assign(ctx.config.theme, fresh.theme);
     Object.assign(ctx.config.keys, fresh.keys);
     Object.assign(ctx.colors, fresh.theme);
@@ -334,7 +347,7 @@ export const makeRetheme = (ctx: RethemeCtx) => {
       }
     }
     try {
-      ctx.normalizePanes?.();
+      ctx.normalizePanes?.(prevDual, seen.dualPane);
     } catch {}
 
     // per-pane sort state converges onto the configured mode BEFORE the

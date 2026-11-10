@@ -41,6 +41,32 @@ export const togglePane = <T>(p: PanePair<T>): void => {
   p.active = otherPane(p);
 };
 
+// What a config apply does to the panes. The decision is PURE: the off→on
+// edge ("dual pane just turned on") is a fact about the TRANSITION, so it
+// is computed from the PAIR (prev → next) — not from a shadow field that
+// the very hook consuming it also updated (a hook that threw left that
+// field stale: the edge was then missed, or it fired AGAIN and re-pointed
+// pane 1, wiping the user's navigation there).
+export type PaneNormalizeAction =
+  | { kind: "none" }
+  | { kind: "activate-first" }
+  | { kind: "point-hidden-at"; dir: string };
+
+export const paneNormalizeAction = (opts: {
+  prev: boolean;
+  next: boolean;
+  active: PaneIndex;
+  activeCwd: string;
+}): PaneNormalizeAction => {
+  // dual pane off: a hidden pane must never own input/status — the active
+  // pane falls back to the first one
+  if (!opts.next) return opts.active !== 0 ? { kind: "activate-first" } : { kind: "none" };
+  // dual pane just turned on: the hidden pane's cwd is stale from boot —
+  // open it at the active pane's current directory. Held on (prev === next)
+  // is NOT an edge: the pane keeps wherever the user took it.
+  return opts.prev ? { kind: "none" } : { kind: "point-hidden-at", dir: opts.activeCwd };
+};
+
 // A stable facade over whichever pane is active: property reads/writes forward
 // to the active state, so consumers that hold one `state`/`selection` reference
 // keep working unchanged while the active pane changes under them. Methods are

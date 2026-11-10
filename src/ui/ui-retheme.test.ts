@@ -392,6 +392,44 @@ describe("applyConfig", () => {
     expect(ctx.calls.notify.length).toBe(2); // off->on again: remind again
   });
 
+  test("the dual-pane hook gets the applied PAIR — the edge is a fact about the transition", () => {
+    // The off→on edge ("dual pane just turned on") used to be inferred in
+    // the wiring from a shadow field (`lastDual`) that ONLY the hook itself
+    // updated. The hook received no previous value, so it could only
+    // re-derive the edge — and a hook that threw (the call site swallows
+    // it) left the shadow stale: the edge was then missed, or it fired
+    // AGAIN on the next apply, re-pointing pane 1 and wiping the user's
+    // navigation there.
+    const ctx = mkCtx() as any;
+    const pairs: Array<[boolean, boolean]> = [];
+    ctx.normalizePanes = (prev: boolean, next: boolean) => {
+      pairs.push([prev, next]);
+    };
+    const retheme = makeRetheme(ctx);
+    const on = clone(defaultConfig);
+    (on.ui as Record<string, unknown>).dualPane = true;
+    retheme.applyConfig(on);
+    // the flip: off → on
+    expect(pairs).toEqual([[false, true]]);
+    // held on: the previous value is now true, so the edge is NOT an edge
+    retheme.applyConfig(clone(ctx.config));
+    expect(pairs).toEqual([
+      [false, true],
+      [true, true],
+    ]);
+    // off, then on again: a NEW edge
+    const off = clone(ctx.config);
+    (off.ui as Record<string, unknown>).dualPane = false;
+    retheme.applyConfig(off);
+    retheme.applyConfig(on);
+    expect(pairs).toEqual([
+      [false, true],
+      [true, true],
+      [true, false],
+      [false, true],
+    ]);
+  });
+
   test("follow-terminal under tty warns once that the console palette wins", () => {
     const ctx = mkCtx();
     (ctx as Record<string, unknown>).isTtyMode = () => true;
