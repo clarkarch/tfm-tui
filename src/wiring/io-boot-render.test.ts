@@ -13,8 +13,11 @@ const harness = (over: Partial<{ gridDelayMs: number; drainDelayMs: number; burs
     renderAll: () => {
       calls.push("render");
     },
-    markBootRendered: () => {
-      calls.push("mark");
+    beginBootPaint: () => {
+      calls.push("begin");
+    },
+    endBootPaint: () => {
+      calls.push("end");
     },
     renderAllSettled: async () => {
       calls.push("settled");
@@ -30,12 +33,16 @@ const harness = (over: Partial<{ gridDelayMs: number; drainDelayMs: number; burs
 };
 
 describe("runBootRender", () => {
-  test("the render is marked as painted before the async work settles", async () => {
-    // markBootRendered flips the lazy plugin-scan repaint gate: a scan that
-    // settles BEFORE the first paint needs no repaint (the paint includes it).
+  test("the paint's phase opens before the async work settles", async () => {
+    // the boot paint's PHASE gates the lazy plugin scan's repaint: an arrival
+    // that lands while the paint is in flight is deferred until it settles
+    // (a repaint now would interleave a second full render with the paint)
     const { ctx, calls } = harness();
     await runBootRender(ctx);
-    expect(calls.indexOf("mark")).toBeLessThan(calls.indexOf("settled"));
+    expect(calls).toContain("begin");
+    expect(calls).toContain("end");
+    expect(calls.indexOf("begin")).toBeLessThan(calls.indexOf("settled"));
+    expect(calls.indexOf("end")).toBeGreaterThan(calls.indexOf("settled"));
   });
 
   test("lazy startup paints immediately (no wait — the progressive arrival is the feature)", async () => {
@@ -43,7 +50,9 @@ describe("runBootRender", () => {
     // wait for the grid build or the rasters (that wait IS the burst startup)
     const { ctx, calls } = harness({ burst: false, gridDelayMs: 50, drainDelayMs: 50 });
     await runBootRender(ctx);
-    expect(calls).toEqual(["render", "mark"]);
+    // the render happened; the rasters were NOT awaited (the drain never ran)
+    expect(calls).toContain("render");
+    expect(calls).not.toContain("drain");
   });
 
   test("the boot waits for the grid build AND the icon rasters", async () => {
@@ -52,7 +61,8 @@ describe("runBootRender", () => {
     // not fallback glyphs
     const { ctx, calls } = harness();
     await runBootRender(ctx);
-    expect(calls).toEqual(["render", "mark", "settled", "drain"]);
+    expect(calls.indexOf("settled")).toBeLessThan(calls.indexOf("drain"));
+    expect(calls).toContain("drain");
   });
 
   test("the boot does not finish before the rasters landed", async () => {

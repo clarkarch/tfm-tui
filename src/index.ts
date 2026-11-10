@@ -339,7 +339,8 @@ wireBoot({
   bootStart,
   skipSessionRestore: explicitPath,
   mountSlots: () => plugins.mountSlots(),
-  markBootRendered: () => plugins.markBootRendered(),
+  beginBootPaint: () => plugins.beginBootPaint(),
+  endBootPaint: () => plugins.endBootPaint(),
   afterLayout: () => hover.refresh(),
   playSidebarIntro: () => {
     chrome.sidebarIntro.play();

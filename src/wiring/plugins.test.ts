@@ -145,8 +145,10 @@ describe("background scan (lazy first paint)", () => {
       expect(Date.now() - t0).toBeLessThan(1000);
       // the boot's first paint already happened while this plugin was still
       // loading (the real lazy ordering: fast boot render, slow activate) —
-      // markBootRendered is what wireBoot calls after its renderAll step
-      wiring.markBootRendered();
+      // the boot paint's PHASE is what the background scan asks: it opens
+      // when the paint starts and closes when it settles
+      wiring.beginBootPaint();
+      wiring.endBootPaint();
       // the live array hydrates when the scan settles (poll, never sleep —
       // suite rule for fire-and-forget races)
       const deadline = Date.now() + 10000;
@@ -168,7 +170,8 @@ describe("background scan (lazy first paint)", () => {
   // BEFORE buildLayout (measured: a whole render cascade ~2s before
   // `boot: buildLayout`) — that redundant pre-layout render is why lazy-startup
   // measured SLOWER than eager. The pending boot render already reads the live
-  // registry.plugins, so the follow-up must be skipped until markBootRendered.
+  // registry.plugins, so the follow-up must be skipped while the boot paint's
+  // phase is still "pre-paint".
   test("scan settled before the boot render pumps nothing (first paint covers it)", async () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "tfm-wire-plugins-early-"));
     const pluginsHome = path.join(root, "config", "tfm", "plugins");
@@ -205,7 +208,7 @@ describe("background scan (lazy first paint)", () => {
       while (wiring.plugins.length === 0 && Date.now() < deadline) await Bun.sleep(10);
       expect(wiring.plugins.map((p) => p.name)).toEqual(["early"]);
       expect(wiring.api.commands().map((c) => c.id)).toContain("early:hi");
-      // boot has NOT rendered yet (markBootRendered was never called): the
+      // boot has NOT painted yet (the paint's phase is still "pre-paint"): the
       // upcoming boot render includes this plugin, so no repaint is due — the
       // old unconditional renderAll made this 1 (the regression)
       expect(renders).toBe(0);

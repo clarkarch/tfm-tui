@@ -181,9 +181,14 @@ export const BOOT_RENDER_BUDGET_MS = 3000;
 
 export type BootRenderCtx = {
   renderAll(): void;
-  // flips the lazy plugin-scan repaint gate: a scan that settles BEFORE the
-  // first paint needs no repaint (the paint includes it)
-  markBootRendered?(): void;
+  // the boot paint's PHASE — the plugins wiring's late-arrival gate asks it
+  // whether the pending paint already covers a late plugin arrival. The phase
+  // flips in the SAME call that performs the paint: `beginBootPaint` when the
+  // paint starts, `endBootPaint` when it settles (an arrival that landed
+  // DURING the paint is deferred to that moment, so the boot paint is never
+  // interleaved with a second full render).
+  beginBootPaint?(): void;
+  endBootPaint?(): void;
   // resolves when the async render steps (the grid build) have settled
   renderAllSettled(): Promise<void>;
   // the icon rasters: the grid queues its own (fire-and-forget) — the boot
@@ -199,8 +204,23 @@ export type BootRenderCtx = {
 };
 
 export const runBootRender = async (ctx: BootRenderCtx): Promise<void> => {
+  // the paint's phase flips in the SAME call that performs it: an arrival
+  // that lands while the paint is in flight is deferred to its end, so the
+  // boot paint is never interleaved with a second full render
+  ctx.beginBootPaint?.();
   ctx.renderAll();
-  ctx.markBootRendered?.();
+  // the paint settles in the BACKGROUND (the lazy path never waits for it) —
+  // the phase closes when it does, and the deferred repaint runs then
+  let settled: Promise<void> = Promise.resolve();
+  try {
+    settled = ctx.renderAllSettled();
+  } catch (err) {
+    ctx.log?.(`boot render failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  void settled.then(
+    () => ctx.endBootPaint?.(),
+    () => ctx.endBootPaint?.(),
+  );
   // lazy startup: the app is NOT hidden, so there is nothing to wait for —
   // the grid build and the rasters land in the background, as they always did
   if (!ctx.burst) return;
@@ -208,7 +228,7 @@ export const runBootRender = async (ctx: BootRenderCtx): Promise<void> => {
   // it reports, and a failed drain must not become an unhandled rejection
   const complete = async (): Promise<void> => {
     try {
-      await ctx.renderAllSettled();
+      await settled;
       await ctx.drainIcons();
     } catch (err) {
       ctx.log?.(`boot render failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -255,10 +275,12 @@ export const wireBoot = (deps: {
   skipSessionRestore?: boolean;
   // plugin UI slots mount into the boot layout (see app/boot.ts)
   mountSlots?: () => void;
-  // the lazy plugin background scan must know the boot's first renderAll has
-  // happened, so a scan that settles earlier skips its redundant repaint (the
-  // pre-layout render that made lazy-startup slower — see wiring/plugins.ts)
-  markBootRendered?: () => void;
+  // the lazy plugin background scan asks the boot paint's PHASE whether its
+  // arrival still needs a repaint (a scan that settles before the paint needs
+  // none — the pre-layout render that made lazy-startup slower; see
+  // wiring/plugins.ts). The phase is driven by the boot render seam.
+  beginBootPaint?: () => void;
+  endBootPaint?: () => void;
   // cold-boot-only sidebar intro, played after the first renderAll (built in
   // wireChrome; a no-op unless [ui] sidebar-animation is on)
   playSidebarIntro?: () => void;
@@ -382,7 +404,8 @@ export const wireBoot = (deps: {
     renderAll: () =>
       runBootRender({
         renderAll: () => nav.renderAll(),
-        markBootRendered: () => deps.markBootRendered?.(),
+        beginBootPaint: () => deps.beginBootPaint?.(),
+        endBootPaint: () => deps.endBootPaint?.(),
         renderAllSettled: () => nav.renderAllSettled(),
         drainIcons: () => core.slots.drainIconQueue(),
         // lazy startup OFF = the burst startup: wait for the complete first

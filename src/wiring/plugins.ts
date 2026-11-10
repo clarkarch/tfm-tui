@@ -23,6 +23,7 @@ import { PLUGINS_ENABLED } from "../plugins/plugin-gate";
 import type { CoreWiring } from "./core";
 import type { ChromeWiring, GridFoundationWiring, NavWiring } from "./types";
 import { tdzSafe } from "./late-slot";
+import { makeBootPaintGate } from "../app/boot-phase";
 
 export type PluginsWiring = Awaited<ReturnType<typeof wirePlugins>>;
 
@@ -267,26 +268,25 @@ export const wirePlugins = async (deps: {
   // The boot sequence's first renderAll reads the LIVE registry.plugins, so a
   // scan that settles BEFORE it needs no repaint — the old unconditional
   // renderAll here fired a full pre-layout render (~100ms, measured) that made
-  // lazy-startup SLOWER than eager. bootRendered flips right after the boot
-  // render (wireBoot -> wirePlugins.markBootRendered); only genuinely late
-  // arrivals repaint.
-  let bootRendered = false;
-  const markBootRendered = (): void => {
-    bootRendered = true;
-  };
+  // lazy-startup SLOWER than eager. The boot paint's PHASE decides: the paint
+  // has not been requested (the pending paint covers the arrival → skip), the
+  // paint is in flight (defer: a repaint now would interleave a second full
+  // render with the boot paint), or the paint is done (repaint now).
+  const bootPaint = makeBootPaintGate();
   const scanSettled = (): void => {
     reportShadowedBinds();
     try {
       sharedPluginEvents().emit("boot", {});
     } catch {}
     // late arrivals (slots/rows/menus/commands) paint without waiting for the
-    // next navigation — but ONLY once the first paint happened; otherwise the
-    // pending boot render already includes them. Render-only (no layout work
-    // the boot steps own); safe no-op when nothing arrived.
-    if (!bootRendered) return;
-    try {
-      nav.renderAll();
-    } catch {}
+    // next navigation — but ONLY once the boot paint has been requested;
+    // otherwise the pending boot render already includes them. Render-only (no
+    // layout work the boot steps own); safe no-op when nothing arrived.
+    bootPaint.lateArrival(() => {
+      try {
+        nav.renderAll();
+      } catch {}
+    });
   };
   // Classic boot (lazy-startup off, the default) awaits the scan so plugins
   // are present on the first paint. NOTE: this follow-up renderAll is
@@ -327,9 +327,12 @@ export const wirePlugins = async (deps: {
     reloadPlugins: () => registry.scan(),
     confirm: api.ui.confirm,
     deactivateAll: registry.deactivateAll,
-    // wireBoot calls this right after its first renderAll step, so the lazy
-    // background scan knows a scan settled before that needs no repaint
-    markBootRendered,
+    // the boot paint's phase — the boot render seam flips it around the
+    // first paint, so the lazy background scan knows whether its arrival
+    // still needs a repaint (and whether that repaint must wait for the
+    // in-flight paint)
+    beginBootPaint: bootPaint.beginPaint,
+    endBootPaint: bootPaint.endPaint,
     // Plugins-view on/off: register/unregister that plugin's slots immediately
     setSlotEnabled: registry.setSlotEnabled,
     // UI slots: mount after the boot layout exists; refresh with renderAll so
