@@ -401,8 +401,8 @@ export const wireRetheme = (deps: {
     // live Sliders on a theme flip (a rebuild would drop the scroll pos)
     restyleScrollbars: () => {
       const m = scrollbarTrackColors(core.colors);
-      for (const ref of core.scrollerRefs) {
-        const s = ref.current;
+      for (const pane of [0, 1] as const) {
+        const s = core.scrollerFor(pane);
         if (!s) continue;
         try {
           s.verticalScrollBar.trackOptions = m;

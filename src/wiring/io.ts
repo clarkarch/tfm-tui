@@ -370,8 +370,7 @@ export const wireBoot = (deps: {
         emptyAreaEntries: grid.menuEntries.emptyAreaEntries,
         isTtyMode: core.isTtyMode,
       });
-      core.scrollerRefs[0].current = scrollers[0];
-      core.scrollerRefs[1].current = scrollers[1];
+      core.mountScrollers(scrollers);
       // [ui] windowed-grid: the hook wraps the scrollTop setter (wheel, drag
       // auto-scroll, programmatic scrollTo) AND chains the scrollbar's
       // _onChange — a thumb drag writes the position field raw, never the
@@ -629,7 +628,7 @@ export const wireHoverDrawer = (deps: {
     // (the drawer coalesces bursts) and keep the scroll offset so the view
     // doesn't jump to top
     onSettle: () => {
-      const scroller = core.scrollerRef.current;
+      const scroller = core.activeScroller();
       const y = scroller?.scrollTop ?? 0;
       void grid.renderGrid().then(() => {
         try {

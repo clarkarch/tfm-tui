@@ -246,23 +246,27 @@ export const wireCore = (deps: {
   );
   const state = activeFacade(() => activeState(panes));
 
-  // --- Grid scroll containers — assigned during boot (buildLayout step), one
-  // per pane. `scrollerRef` stays the active pane's live ref for the same
-  // facade reason as `state`. ---
-  // a TUPLE, not Array<T>: `panes.active` is PaneIndex (0|1), and tuple
-  // indexing by it needs no non-null assertion — the length is part of the type
-  const scrollerRefs: [{ current: ScrollBoxRenderable | null }, { current: ScrollBoxRenderable | null }] = [
-    { current: null },
-    { current: null },
-  ];
-  const scrollerRef = {
-    get current(): ScrollBoxRenderable | null {
-      return scrollerRefs[panes.active].current;
-    },
-    set current(v: ScrollBoxRenderable | null) {
-      scrollerRefs[panes.active].current = v;
-    },
+  // --- Grid scroll containers — ONE owner, ONE write path.
+  //
+  // The boot layout builds BOTH panes' scrollers in one step (buildBootLayout
+  // returns the pair), so the mount has exactly TWO phases: "unmounted" (the
+  // boot layout has not run yet — the grid's render is a no-op, it has nothing
+  // to draw into) and "mounted" (both panes' scrollers exist). The old shape
+  // was two mutable `{current}` boxes: a PARTIAL mount (pane 0 set, pane 1
+  // not) was representable, and `null` meant "not built yet" / "this pane is
+  // not mounted" / "torn down", depending on the reader. ---
+  type ScrollerMount =
+    | { kind: "unmounted" }
+    | { kind: "mounted"; scrollers: [ScrollBoxRenderable, ScrollBoxRenderable] };
+  let mount: ScrollerMount = { kind: "unmounted" };
+  // the ONE write path: the boot layout mounts both panes' scrollers
+  const mountScrollers = (scrollers: [ScrollBoxRenderable, ScrollBoxRenderable]): void => {
+    mount = { kind: "mounted", scrollers };
   };
+  const scrollerFor = (pane: 0 | 1): ScrollBoxRenderable | null =>
+    mount.kind === "mounted" ? mount.scrollers[pane] : null;
+  // the ACTIVE pane's scroller — the grid renders into it
+  const activeScroller = (): ScrollBoxRenderable | null => scrollerFor(panes.active);
 
   // --- Virtual places: Recent (freedesktop recently-used.xbel) & Starred.
   // URI/XDG primitives live in ./uri.
@@ -327,8 +331,12 @@ export const wireCore = (deps: {
     setActivePane: (i: 0 | 1) => setActivePane(panes, i),
     togglePane: () => togglePane(panes),
     refreshPaneFocus,
-    scrollerRef,
-    scrollerRefs,
+    // the grid scrollers' mount: ONE write path (the boot layout), one phase
+    // predicate, and the per-pane / active-pane readers
+    mountScrollers,
+    scrollersMounted: () => mount.kind === "mounted",
+    scrollerFor,
+    activeScroller,
     isVirtualCwd,
     inTrashView,
     isCutKey,

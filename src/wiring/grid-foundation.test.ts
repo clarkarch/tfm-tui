@@ -20,7 +20,9 @@ const harness = (over: HarnessOver = {}) => {
     lookup: { byId: () => null, setTextOnId: () => {}, stripSelectable: () => {} },
     slots: { setIconState: () => {}, escHintBtn: () => ({}), drainIconQueue: () => {} },
     isCutKey: () => false,
-    scrollerRefs: [{ current: null }, { current: null }],
+    // the grid scrollers' mount (the boot layout mounts both panes in one
+    // step; the fake mirrors the real per-pane reader)
+    scrollerFor: () => null,
     geometry: { tileH: 3, tileW: 8 },
     panes: { active: over.active ?? 0 },
     isVirtualCwd: () => !!over.virtual,

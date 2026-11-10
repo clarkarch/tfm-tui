@@ -139,3 +139,40 @@ describe("the app content's presentation", () => {
     }
   });
 });
+
+// --- The grid scrollers' MOUNT.
+//
+// The scrollers are built by the boot layout — BOTH panes in one step
+// (buildBootLayout returns the pair) — and the grid renders INTO the active
+// pane's scroller. The old shape was two mutable `{current}` boxes: a
+// PARTIAL mount (pane 0 set, pane 1 not) was representable, and `null` meant
+// "the boot layout has not run yet" / "this pane is not mounted" / "torn
+// down", depending on the reader. The mount is now ONE record with two
+// phases — unmounted | mounted — so a partial mount is unrepresentable and
+// the active pane ALWAYS has a scroller once the mount happened.
+describe("the grid scrollers' mount", () => {
+  test("both panes' scrollers mount together, and the active pane always has one", () => {
+    const h = coreHarness("fill");
+    try {
+      // before the boot layout: NO pane has a scroller (the grid's render is
+      // a no-op — it has nothing to draw into)
+      expect(h.core.scrollersMounted()).toBe(false);
+      expect(h.core.scrollerFor(0)).toBeNull();
+      expect(h.core.scrollerFor(1)).toBeNull();
+      expect(h.core.activeScroller()).toBeNull();
+      // the boot layout mounts BOTH panes' scrollers in one step
+      const first = { id: "tfm-scroll" } as never;
+      const second = { id: "tfm-scroll-2" } as never;
+      h.core.mountScrollers([first, second]);
+      expect(h.core.scrollersMounted()).toBe(true);
+      expect(h.core.scrollerFor(0)).toBe(first);
+      expect(h.core.scrollerFor(1)).toBe(second);
+      // the ACTIVE pane always has one — the grid renders into it
+      expect(h.core.activeScroller()).toBe(first);
+      h.core.setActivePane(1);
+      expect(h.core.activeScroller()).toBe(second);
+    } finally {
+      h.restore();
+    }
+  });
+});

@@ -33,7 +33,7 @@ export const wireGridFoundation = (deps: {
       setText: nav.setStatusLabel,
       setIconState: core.slots.setIconState,
       isCutKey: core.isCutKey,
-      scroller: () => core.scrollerRefs[pane].current,
+      scroller: () => core.scrollerFor(pane),
       viewH: () => chrome.renderer.terminalHeight - 3,
       rowHInit: () => core.geometry.tileH,
       renderPreview: () => getGrid().renderPreview(),

@@ -304,9 +304,9 @@ export const wireGrid = (deps: {
   // scrolling, just spread over time
   const makeWheelSmootherFor = (pane: 0 | 1) =>
     makeWheelSmoother({
-      scrollTop: () => core.scrollerRefs[pane].current?.scrollTop ?? 0,
+      scrollTop: () => core.scrollerFor(pane)?.scrollTop ?? 0,
       scrollBy: (d) => {
-        const s = core.scrollerRefs[pane].current;
+        const s = core.scrollerFor(pane);
         if (!s) return;
         s.scrollTop = Math.max(0, Math.round(s.scrollTop + d));
       },
@@ -362,7 +362,7 @@ export const wireGrid = (deps: {
     makeGridRenderer({
       termW: () => chrome.renderer.terminalWidth,
       termH: () => chrome.renderer.terminalHeight,
-      scroller: () => core.scrollerRefs[pane].current,
+      scroller: () => core.scrollerFor(pane),
       state: core.panes.states[pane],
       searchQuery: () => nav.searches[pane].getQuery(),
       recursiveSearch: () => core.config.ui.recursiveSearch,
