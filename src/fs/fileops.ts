@@ -19,6 +19,9 @@ import {
   fileIdOf,
   fsErrText,
   fsMove,
+  extractStageName,
+  isCrashedExtractStage,
+  keepExtractStage,
   isInTrashFiles,
   isWithinOrEqual,
   rmTrashInfoForPath,
@@ -646,8 +649,11 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
       for (const k of kids) {
         // anchor to the exact temp-name shape (<name>.tfm-part-<pid>-<rand8>
         // and .tfm-extract-<pid>-<rand8>) — a substring match silently
-        // deleted real user files like notes.tfm-part-2.md
-        if (/\.tfm-part-\d+-[0-9a-z]{8}$/.test(k) || /^\.tfm-extract-\d+-[0-9a-z]{8}$/.test(k)) {
+        // deleted real user files like notes.tfm-part-2.md. The extract
+        // shape lives in fsutil next to its name (one home per shape); a
+        // KEPT stage (`.tfm-extract-kept-*`) does NOT match it, so the data
+        // a failed landing kept survives this sweep.
+        if (/\.tfm-part-\d+-[0-9a-z]{8}$/.test(k) || isCrashedExtractStage(k)) {
           try {
             await rm(path.join(destDir, k), { recursive: true, force: true });
           } catch (err) {
@@ -1383,6 +1389,22 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
   // resurrect a deleted staging dir). Compress writes to a `.tfm-part-*` temp
   // so a cancel/crash can't leave a half-written archive (and the existing
   // orphan sweep in runTransferInner cleans a killed run). ---
+  // The extraction stage's state — ONE tagged record per archive:
+  //   "extracting" — the tool is writing into the stage.
+  //   "landing"    — the extracted members are being moved out into destDir.
+  //   "kept"       — a member could NOT be moved: the stage still holds the
+  //                 user's data → it must NOT be deleted with it. The old
+  //                 model had no state at all (the `finally` removed EVERY
+  //                 stage), so an extracted member that failed to land was
+  //                 silently dropped — the user was told "1 FAILED" and the
+  //                 content was GONE.
+  type ExtractStage = {
+    path: string;
+    phase: "extracting" | "landing" | "kept";
+    /** the members that could not be moved into destDir (they are still in the stage) */
+    remaining: string[];
+  };
+
   // Spawn-lane containment: the js lane skips `..`/absolute members, but
   // tar/unzip/7z write them relative to the staging dir — `../evil` lands in
   // destDir (or above) unseen by the stage readdir. Snapshot destDir (+parent
@@ -1455,7 +1477,10 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
     const units: UndoUnit[] = [];
     const dUnits: UndoStep[] = [];
     const failWhy = new Set<string>();
-    const staging: string[] = [];
+    const staging: ExtractStage[] = [];
+    // the stages that still hold members which could not land — their paths
+    // go into the report (the data is kept, not dropped)
+    const keptStages: { path: string; remaining: string[] }[] = [];
     let ok = 0;
     let skipped = 0;
     let failed = 0;
@@ -1493,8 +1518,8 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
           skipped++;
           continue;
         }
-        const stage = path.join(destDir, `.tfm-extract-${process.pid}-${Math.random().toString(36).slice(2, 10)}`);
-        const stageBase = path.basename(stage);
+        const stagePath = path.join(destDir, extractStageName());
+        const stageBase = path.basename(stagePath);
         // containment snapshots: `../` members escape the stage into destDir
         // (or its parent for `../../`) — anything new there after the tool ran
         // is an escape artifact, never user data created through tfm (the
@@ -1503,10 +1528,11 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
         const parentDir = path.dirname(path.resolve(destDir));
         const beforeDest = await snapshotNames(destDir);
         const beforeParent = parentDir === path.resolve(destDir) ? beforeDest : await snapshotNames(parentDir);
-        await mkdir(stage, { recursive: true });
+        await mkdir(stagePath, { recursive: true });
+        const stage: ExtractStage = { path: stagePath, phase: "extracting", remaining: [] };
         staging.push(stage);
         const res = await runArchiveOp(
-          { op: "extract", fmt, file, destDir: stage },
+          { op: "extract", fmt, file, destDir: stagePath },
           {
             // FINISHED members: tar/7z print the name when the member
             // STARTS, so the count lags by one — the bar may never read as
@@ -1564,17 +1590,20 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
           failWhy.add(`archive wrote outside staging (${escaped} moved to trash)`);
           continue;
         }
-        const cutLinks = await sanitizeStagedLinks(stage);
+        const cutLinks = await sanitizeStagedLinks(stagePath);
         if (cutLinks) ctx.log(`staging links removed ${path.basename(file)}: ${cutLinks}`);
         let entries: string[];
         try {
-          entries = await readdir(stage);
+          entries = await readdir(stagePath);
         } catch {
           entries = [];
         }
+        // the members are moving out now — the stage's fate depends on
+        // whether they all make it
+        stage.phase = "landing";
         let movedHere = 0;
         for (const name of entries) {
-          const src = path.join(stage, name);
+          const src = path.join(stagePath, name);
           let target = path.join(destDir, name);
           if (existsSync(target)) {
             const choice = (await conflict.promptConflict(target, 0)).choice;
@@ -1612,7 +1641,12 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
             movedHere++;
           } catch (err) {
             failed++;
-            failWhy.add(fsErrText(err));
+            // the member is STILL in the stage: the stage must not be
+            // deleted with it (the extracted content is the user's data,
+            // and the report must say where it went)
+            failWhy.add(`${name}: ${fsErrText(err)}`);
+            stage.remaining.push(name);
+            stage.phase = "kept";
           }
         }
         // an archive that yielded nothing is not a success and must not
@@ -1625,8 +1659,25 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
       clearArchiveChild();
       finishProgressPhase(prog);
       for (const s of staging) {
+        if (s.phase === "kept") {
+          // the stage still holds members that could not land: KEEP it.
+          // It is renamed out of the swept temp shape (the crash-orphan
+          // sweep deletes `.tfm-extract-<pid>-<rand8>`), so the next
+          // transfer cannot remove the user's data behind their back, and
+          // its path goes into the report so the user can find it.
+          try {
+            const keptPath = await keepExtractStage(s.path);
+            keptStages.push({ path: keptPath, remaining: s.remaining });
+          } catch (err) {
+            // the rename failed — the stage still holds the data, so it
+            // stays where it is and the report names THAT path
+            ctx.log(`extract stage keep failed ${s.path}: ${fsErrText(err)}`);
+            keptStages.push({ path: s.path, remaining: s.remaining });
+          }
+          continue;
+        }
         try {
-          await rm(s, { recursive: true, force: true });
+          await rm(s.path, { recursive: true, force: true });
         } catch (err) {
           // a surviving .tfm-extract-* dir is hidden debris in the user's folder
           swallow("archive staging cleanup", err);
@@ -1639,6 +1690,12 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
     const bits = [cancelled ? `Extract cancelled · ${ok} done` : `Extracted ${ok} archive${ok === 1 ? "" : "s"}`];
     if (skipped) bits.push(`${skipped} skipped`);
     if (failed) bits.push(failSuffix(failed, failWhy));
+    // the members that could not land are NOT lost: they are in a kept
+    // stage, and the report says which ones and where they are
+    for (const k of keptStages) {
+      const names = k.remaining.length ? k.remaining.join(", ") : "members";
+      bits.push(`kept ${names} at ${k.path}`);
+    }
     const msg = bits.join(" · ");
     finishOpSummary("extract", "Extract", `Extracted ${ok}`, msg, [...files], destDir, cancelled, failed);
   };

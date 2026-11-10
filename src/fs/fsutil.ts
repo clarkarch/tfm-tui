@@ -834,6 +834,40 @@ export const trashIfSameFile = async (p: string, id: FileId | null, log?: (msg: 
 export const tmpName = (base: string): string =>
   `${base}.tfm-part-${process.pid}-${Math.random().toString(36).slice(2, 10)}`;
 
+// The extraction stage dir's name shape (`.tfm-extract-<pid>-<rand8>`). The
+// crash-orphan sweep anchors to this EXACT shape, so the name and the test
+// live together: a substring match would delete real user files.
+export const extractStageName = (): string => `.tfm-extract-${process.pid}-${Math.random().toString(36).slice(2, 10)}`;
+
+// Is this name a CRASHED extraction stage (safe debris to delete)? The test
+// is anchored to the exact shape — a stage that still holds a member the
+// user needs is renamed to the KEPT shape below, which does NOT match.
+export const isCrashedExtractStage = (name: string): boolean => /^\.tfm-extract-\d+-[0-9a-z]{8}$/.test(name);
+
+// The KEPT stage shape (`.tfm-extract-kept-<pid>-<rand8>`): outside the
+// swept shape, so the data survives the next transfer's crash sweep.
+const keptExtractStageName = (): string =>
+  `.tfm-extract-kept-${process.pid}-${Math.random().toString(36).slice(2, 10)}`;
+
+// Rename an extraction stage that still holds members OUT of the swept temp
+// shape and return its new path. The stage holds the USER'S data (a member
+// that could not be moved into the destination), so it must not keep the
+// name the crash-orphan sweep deletes — the next transfer would remove it
+// and the content would be gone with no trace.
+export const keepExtractStage = async (stage: string): Promise<string> => {
+  const dir = path.dirname(stage);
+  for (let i = 0; i < 10; i++) {
+    const cand = path.join(dir, keptExtractStageName());
+    try {
+      await fsRename(stage, cand);
+      return cand;
+    } catch (err) {
+      if (errCode(err) !== "EEXIST") throw err;
+    }
+  }
+  throw new Error(`cannot keep extract stage ${path.basename(stage)}`);
+};
+
 // Exclusive claim of a sibling tmp: the rand name is 64-bit, but two live ops
 // on the same dest (or a planted name) would otherwise share one tmp and
 // clobber each other mid-copy. mkdir/open-wx fail EEXIST atomically, so a won

@@ -1436,6 +1436,76 @@ describe("extractArchive", () => {
     expect(readFileSync(path.join(destDir, "foo (copy)"), "utf8")).toBe("new");
   });
 
+  test("an entry that fails to land is KEPT and reported, not silently deleted", async () => {
+    // The staged member could not be moved into destDir: the replace-stash
+    // reported success but the victim was still there (a race), so the
+    // rename hit a DIRECTORY where a file goes (EISDIR). The old cleanup
+    // removed EVERY stage in the `finally` → the member the tool had
+    // extracted vanished with no trace: the user was told "1 FAILED" and
+    // the content was GONE (the archive still had it, but the op silently
+    // threw away what it had just produced).
+    const { runArchive } = fakeArchive({ entries: { "payload.bin": "extracted" } });
+    const h = makeHarness({
+      runArchive,
+      listArchive: async () => 1,
+      conflict: { promptConflict: async () => ({ choice: "replace" as const }) },
+      // the stash "succeeded" but the victim is still there (a race)
+      stashVictim: async () => true,
+    });
+    const destDir = path.join(ROOT, "x-keep");
+    // a DIRECTORY named payload.bin — the staged FILE cannot be renamed onto it
+    mkdirSync(path.join(destDir, "payload.bin"), { recursive: true });
+    W(path.join(destDir, "payload.bin", "inner.txt"), "inner");
+    const archive = path.join(ROOT, "x-keep.tar.gz");
+    W(archive, "x");
+
+    await h.ops.extractArchive([archive], destDir);
+
+    // the extracted member survived SOMEWHERE under destDir
+    const kept = readdirSync(destDir).filter(
+      (n) => n !== "payload.bin" && existsSync(path.join(destDir, n, "payload.bin")),
+    );
+    expect(kept.length).toBe(1);
+    expect(readFileSync(path.join(destDir, kept[0]!, "payload.bin"), "utf8")).toBe("extracted");
+    // ... and the report says WHERE it is and WHICH member it was
+    const note = h.calls.find((c) => c.startsWith("notify:extract failed:")) ?? "";
+    expect(note).toContain(kept[0]!);
+    expect(note).toMatch(/kept .*payload\.bin/);
+  });
+
+  test("a kept stage survives the next transfer's crash sweep", async () => {
+    // The crash-orphan sweep deletes `.tfm-extract-<pid>-<rand8>` debris
+    // before every transfer. A stage that still holds a member the user
+    // needs must NOT wear that name — the sweep would delete the data with
+    // no trace (the exact silent-drop this keeps alive).
+    const { runArchive } = fakeArchive({ entries: { "payload.bin": "extracted" } });
+    const h = makeHarness({
+      runArchive,
+      listArchive: async () => 1,
+      conflict: { promptConflict: async () => ({ choice: "replace" as const }) },
+      stashVictim: async () => true,
+    });
+    const destDir = path.join(ROOT, "x-keep-sweep");
+    mkdirSync(path.join(destDir, "payload.bin"), { recursive: true });
+    W(path.join(destDir, "payload.bin", "inner.txt"), "inner");
+    const archive = path.join(ROOT, "x-keep-sweep.tar.gz");
+    W(archive, "x");
+
+    await h.ops.extractArchive([archive], destDir);
+    const kept = readdirSync(destDir).filter(
+      (n) => n !== "payload.bin" && existsSync(path.join(destDir, n, "payload.bin")),
+    );
+    expect(kept.length).toBe(1);
+
+    // a later transfer into the same folder runs the crash sweep
+    const src = path.join(ROOT, "x-keep-sweep-src");
+    W(src, "payload");
+    await h.ops.runTransfer("copy", destDir, [src], "paste");
+
+    // the kept member is still there
+    expect(existsSync(path.join(destDir, kept[0]!, "payload.bin"))).toBe(true);
+  });
+
   test("cancel kills the run and discards the staging dir", async () => {
     const { runArchive, runs } = fakeArchive();
     const h = makeHarness({
