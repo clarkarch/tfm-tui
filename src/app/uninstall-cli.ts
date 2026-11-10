@@ -37,7 +37,7 @@ import {
 } from "../fs/default-filemanager";
 import { xdgCacheHome, xdgConfigHome, xdgDataHome, xdgStateHome } from "../fs/uri";
 import { fileManagerServiceFile } from "./filemanager-service";
-import { readTtyLine } from "./update-cli";
+import { askOnce } from "../lib/cli-ask";
 import { installDirOf, installInfoPath, isDevBuild } from "./update-run";
 
 export type UninstallCommand = "uninstall" | "help";
@@ -57,10 +57,10 @@ export const uninstallHelp = (): string =>
 
 Usage: tfm uninstall
 
-It shows what it will remove and asks twice: keep or delete your settings and
-plugins, then confirm the uninstall. Runs without prompts outside a terminal
-and keeps your data then. A custom TFM_CONFIG file is left alone. Source
-builds update with source.sh; this only removes.
+It shows what it will remove and asks twice: confirm the uninstall, then keep
+or delete your settings and plugins. Outside a terminal there is nobody to
+confirm with, so it changes nothing. A custom TFM_CONFIG file is left alone.
+Source builds update with source.sh; this only removes.
 
   exit codes: 0 removed · 1 a part could not be removed · 2 usage
 `;
@@ -121,12 +121,6 @@ const resolvePaths = (deps: UninstallCliDeps, binDir: string): UninstallPaths =>
     serviceFile: fileManagerServiceFile(data),
     rcFiles: rcFiles(home, config),
   };
-};
-
-const defaultNoAsk = async (question: string): Promise<boolean> => {
-  process.stdout.write(`${question} [y/N] `);
-  const line = (await readTtyLine()).trim().toLowerCase();
-  return line === "y" || line === "yes";
 };
 
 const existsLstat = (p: string): boolean => {
@@ -306,20 +300,41 @@ export const runUninstallCli = async (args: string[], deps: UninstallCliDeps = {
   planPath(path.join(dirs.dataDir, "install.json"));
 
   const interactive = (deps.isTTY ?? (() => process.stdin.isTTY === true))();
-  const ask = deps.ask ?? defaultNoAsk;
   // green success line on a real terminal; plain when piped or NO_COLOR
   const green = (s: string): string => (interactive && !process.env.NO_COLOR ? `\u001b[32m${s}\u001b[0m` : s);
   let removeData = false;
   let items: string[] = plan;
-  if (interactive) {
-    const go = await ask("Uninstall tfm?");
-    if (!go) {
-      out("cancelled, nothing changed");
-      return 0;
-    }
-    removeData = await ask("Delete your settings, plugins and caches too?");
-    if (removeData) items = [...plan, ...dataDirs.filter(existsLstat).map(pretty)];
+  // The two policies are NAMED at their ask sites (the old shape asked only
+  // when interactive and skipped the questions otherwise — the answers came
+  // from the `interactive` BOOLEAN, not from the questions):
+  //   - the program removal ABORTS without a terminal: there is nobody to
+  //     confirm the destructive step with, and a piped `tfm uninstall` used
+  //     to remove the program with no question at all;
+  //   - the data wipe is NEVER assumed: the user data stays.
+  const confirm = await askOnce({
+    question: "Uninstall tfm?",
+    interactive,
+    nonInteractive: "abort",
+    defaultAnswer: "no",
+    ...(deps.ask ? { ask: deps.ask } : {}),
+  });
+  if (confirm.kind === "aborted") {
+    out("can't confirm the uninstall without a terminal · nothing changed");
+    return 0;
   }
+  if (!confirm.value) {
+    out("cancelled, nothing changed");
+    return 0;
+  }
+  const wipe = await askOnce({
+    question: "Delete your settings, plugins and caches too?",
+    interactive,
+    nonInteractive: "assume-no",
+    defaultAnswer: "no",
+    ...(deps.ask ? { ask: deps.ask } : {}),
+  });
+  removeData = wipe.kind === "answered" && wipe.value;
+  if (removeData) items = [...plan, ...dataDirs.filter(existsLstat).map(pretty)];
 
   // --- perform ---
   const failures: string[] = [];

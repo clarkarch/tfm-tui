@@ -110,6 +110,21 @@ describe("runUpdateCli", () => {
     expect(h.installs).toHaveLength(1);
   });
 
+  test("the update's non-interactive policy is NAMED, not a branch on `interactive`", async () => {
+    const src = (await Bun.file(`${import.meta.dir}/update-cli.ts`).text())
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/\/\/[^\n]*/g, "");
+    // the policy lives in the shared leaf and is chosen at the ask site:
+    // "assume-yes" — the update is non-destructive and the user explicitly
+    // asked for it, so a piped `tfm update` installs without a question
+    expect(src.includes('from "../lib/cli-ask"')).toBe(true);
+    expect(/nonInteractive: "assume-yes"/.test(src)).toBe(true);
+    expect(src.includes("askOnce(")).toBe(true);
+    // the old shape asked only when interactive and skipped the question
+    // otherwise — the answer came from the BOOLEAN, not from the question
+    expect(/if \(interactive\)/.test(src)).toBe(false);
+  });
+
   test("an installer failure is reported and exits 1", async () => {
     const h = harness({
       install: async (): Promise<InstallerResult> => ({

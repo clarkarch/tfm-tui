@@ -92,7 +92,12 @@ const harness = (over: Partial<UninstallCliDeps> = {}) => {
     out: (l) => out.push(l),
     err: (l) => err.push(l),
     execPath: path.join(binDir, "tfm"),
-    isTTY: () => false,
+    // The INTERACTIVE path is the default for the removal tests: a terminal
+    // asks twice — "Uninstall tfm?" (Yes) and the data wipe (No, so the user
+    // data stays). The piped path has its own test (it changes nothing:
+    // there is nobody to confirm with).
+    isTTY: () => true,
+    ask: async (q) => !/Delete your settings/.test(q),
     currentDefault: () => "",
     prevDefault: () => "",
     restoreDefault: async (op) => {
@@ -188,7 +193,27 @@ describe("stripPathBlock (pure)", () => {
 });
 
 describe("runUninstallCli", () => {
-  test("default: removes the program but keeps settings, plugins and caches", async () => {
+  test("a piped uninstall changes NOTHING (there is nobody to confirm with)", async () => {
+    // Outside a terminal there is nobody to answer the confirm, so the
+    // destructive removal ABORTS. The old shape asked NO question and
+    // removed the program anyway (the policy was a property of the
+    // `interactive` BOOLEAN, not of the question).
+    const h = harness({ isTTY: () => false });
+    expect(await runUninstallCli([], h.deps)).toBe(0);
+    // nothing was removed
+    for (const bin of binaries) expect(existsSync(bin)).toBe(true);
+    expect(existsSync(path.join(applications, "tfm.desktop"))).toBe(true);
+    for (const icon of icons) expect(existsSync(icon)).toBe(true);
+    expect(existsSync(serviceFile)).toBe(true);
+    expect(existsSync(path.join(dataDir, "install.json"))).toBe(true);
+    // and the PATH block is untouched
+    expect(readFileSync(bashrc, "utf8")).toContain("# tfm PATH");
+    // the user is told WHY nothing happened
+    expect(h.out.join("\n")).toMatch(/terminal/i);
+    expect(h.out.join("\n")).not.toContain("removed");
+  });
+
+  test("interactive: a Yes removes the program but keeps settings, plugins and caches", async () => {
     const h = harness();
     expect(await runUninstallCli([], h.deps)).toBe(0);
     expect(h.out.join("\n")).toContain("removed");
@@ -311,6 +336,22 @@ describe("runUninstallCli", () => {
     expect(await runUninstallCli([], kept.deps)).toBe(0);
     expect(existsSync(path.join(dataDir, "src"))).toBe(true);
     expect(existsSync(path.join(dataDir, "install.json"))).toBe(false);
+  });
+
+  test("the uninstall's non-interactive policies are NAMED, not a branch on `interactive`", async () => {
+    const src = (await Bun.file(`${import.meta.dir}/uninstall-cli.ts`).text())
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/\/\/[^\n]*/g, "");
+    // the policy lives in the shared leaf and is chosen at each ask site:
+    // the program removal ABORTS without a terminal (there is nobody to
+    // confirm with), the data wipe is never assumed
+    expect(src.includes('from "../lib/cli-ask"')).toBe(true);
+    expect(/nonInteractive: "abort"/.test(src)).toBe(true);
+    expect(/nonInteractive: "assume-no"/.test(src)).toBe(true);
+    expect(src.includes("askOnce(")).toBe(true);
+    // the old shape asked only when interactive and skipped the questions
+    // otherwise — the answers came from the BOOLEAN, not from the questions
+    expect(/if \(interactive\)/.test(src)).toBe(false);
   });
 
   test("help prints usage and exits 0", async () => {

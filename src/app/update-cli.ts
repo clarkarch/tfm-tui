@@ -6,6 +6,7 @@
 
 import pkg from "../../package.json";
 import { errMessage } from "../lib/uiutil";
+import { askOnce } from "../lib/cli-ask";
 import { isNewer, parseTag, tagFor, UPDATE_LATEST_URL, UPDATE_RELEASES_URL } from "./update";
 import {
   fetchLatestTag,
@@ -81,35 +82,6 @@ export type UpdateCliDeps = {
   ask?: (question: string) => Promise<boolean>;
 };
 
-// read one line from stdin (only reached under a tty). EOF reads as yes: the
-// user typed the command, so a lost terminal must not silently abort the
-// update they asked for. Shared with `tfm uninstall` (which defaults to No).
-export const readTtyLine = async (): Promise<string> => {
-  const reader = Bun.stdin.stream().getReader();
-  const decoder = new TextDecoder();
-  let buf = "";
-  try {
-    while (!buf.includes("\n")) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buf += decoder.decode(value, { stream: true });
-    }
-  } catch {
-    return "";
-  } finally {
-    try {
-      reader.releaseLock();
-    } catch {}
-  }
-  return buf.split("\n")[0] ?? "";
-};
-
-const defaultAsk = async (question: string): Promise<boolean> => {
-  process.stdout.write(`${question} [Y/n] `);
-  const line = (await readTtyLine()).trim().toLowerCase();
-  return line === "" || line === "y" || line === "yes";
-};
-
 export const runUpdateCli = async (args: string[], deps: UpdateCliDeps = {}): Promise<number> => {
   const out = deps.out ?? ((s: string) => console.log(s));
   const err = deps.err ?? ((s: string) => console.error(s));
@@ -178,12 +150,21 @@ export const runUpdateCli = async (args: string[], deps: UpdateCliDeps = {}): Pr
 
   out(`tfm ${current} → ${latest}`);
   const interactive = (deps.isTTY ?? (() => process.stdin.isTTY === true))();
-  if (interactive) {
-    const go = await (deps.ask ?? defaultAsk)("Update now?");
-    if (!go) {
-      out("cancelled, nothing changed");
-      return 0;
-    }
+  // the non-interactive policy is NAMED at the ask site: the update is
+  // non-destructive and the user explicitly asked for it, so a piped
+  // `tfm update` installs without a question (the old shape derived this
+  // from the `interactive` BOOLEAN, so the answer was a property of the
+  // boolean rather than of the question)
+  const outcome = await askOnce({
+    question: "Update now?",
+    interactive,
+    nonInteractive: "assume-yes",
+    defaultAnswer: "yes",
+    ...(deps.ask ? { ask: deps.ask } : {}),
+  });
+  if (outcome.kind === "aborted" || !outcome.value) {
+    out("cancelled, nothing changed");
+    return 0;
   }
 
   const install = deps.install ?? runInstaller;
