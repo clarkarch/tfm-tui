@@ -37,27 +37,45 @@ type CwdWatcherCtx = {
   log?: (msg: string) => void;
 };
 
+// ONE record for the watch lifecycle. The three facts used to live in three
+// variables (watcher / watchedDir / watchErrored) and the re-arm guard was
+// their conjunction — adding a fourth fact silently broke the conjunction and
+// the grid went PERMANENTLY STALE (the exact failure the old comment warned
+// about). The record names the states instead:
+//   "none"     — no dir recorded, no watcher
+//   "watching" — a live watcher on `dir`
+//   "dead"     — `dir` is recorded but NO live watcher covers it (the arm is
+//                still in flight, the arm failed, or the kernel watch died):
+//                the next sync RE-ARMS it
+type WatchState =
+  | { kind: "none" }
+  | { kind: "watching"; dir: string; watcher: ReturnType<typeof watch> }
+  | { kind: "dead"; dir: string; watcher: ReturnType<typeof watch> | null };
+
 export const makeCwdWatcher = (ctx: CwdWatcherCtx) => {
-  let watcher: ReturnType<typeof watch> | null = null;
-  let watchedDir: string | null = null;
-  let watchErrored = false;
+  let state: WatchState = { kind: "none" };
   const doWatch =
     ctx.watchImpl ?? ((dir: string, cb: (filename?: string | null) => void) => watch(dir, (_ev, fname) => cb(fname)));
+
+  // the dir the watcher is bound to (null when there is none) — the ignored
+  // paths are resolved against it
+  const watchedDir = (): string | null => (state.kind === "none" ? null : state.dir);
 
   // fs events burst in clusters; coalesce them into one grid rebuild
   const onCwdChanged = debounced(
     200,
     () => {
       if (ctx.isRenaming()) return;
-      if (path.resolve(ctx.cwd()) === watchedDir) void ctx.renderGrid();
+      if (path.resolve(ctx.cwd()) === watchedDir()) void ctx.renderGrid();
     },
     ctx.sched ?? globalThis,
   );
 
   const isIgnoredEvent = (filename?: string | null): boolean => {
-    if (!filename || !watchedDir || !ctx.ignorePaths) return false;
+    const dir = watchedDir();
+    if (!filename || !dir || !ctx.ignorePaths) return false;
     // node reports a dir-relative name; be lenient if an impl sends absolute
-    const abs = path.isAbsolute(filename) ? path.normalize(filename) : path.join(watchedDir, filename);
+    const abs = path.isAbsolute(filename) ? path.normalize(filename) : path.join(dir, filename);
     return ctx.ignorePaths().some((p) => path.resolve(p) === abs);
   };
 
@@ -67,42 +85,47 @@ export const makeCwdWatcher = (ctx: CwdWatcherCtx) => {
   };
 
   const closeWatcher = (): void => {
-    if (watcher) {
+    if (state.kind === "none") return;
+    if (state.watcher) {
       try {
-        watcher.close();
+        state.watcher.close();
       } catch (err) {
         ctx.log?.(`watcher close failed: ${err}`);
       }
-      watcher = null;
     }
-    watchErrored = false;
+    state = { kind: "none" };
   };
 
   const syncCwdWatcher = (): void => {
     if (ctx.isVirtualCwd()) {
       closeWatcher();
-      watchedDir = null;
       return;
     }
     const dir = path.resolve(ctx.cwd());
     // recorded == alive is NOT an invariant: a watch() throw or a kernel
     // error event (dir replaced under us) leaves the recorded dir with a
-    // DEAD watcher. Track both conditions and re-arm — the grid otherwise
-    // goes permanently stale with no signal.
-    if (watchedDir === dir && !watchErrored && watcher) return;
-    watchedDir = dir;
+    // DEAD watcher. The state says so, and the next sync re-arms — the grid
+    // otherwise goes permanently stale with no signal.
+    if (state.kind === "watching" && state.dir === dir) return;
     closeWatcher();
+    // the dir is recorded BEFORE the watch call: an event that arrives while
+    // the watch is being armed (or a pending rebuild that fires in that
+    // window) still resolves against the dir we are watching
+    state = { kind: "dead", dir, watcher: null };
     try {
-      watcher = doWatch(dir, onFsEvent) as ReturnType<typeof watch>;
+      const watcher = doWatch(dir, onFsEvent) as ReturnType<typeof watch>;
+      state = { kind: "watching", dir, watcher };
       watcher.on("error", (err) => {
         // never swallow silently: mark dead so the next sync re-arms (ANY
-        // error — ENOENT or otherwise — means the kernel watch is gone)
-        watchErrored = true;
+        // error — ENOENT or otherwise — means the kernel watch is gone).
+        // A LATE error from a watcher we already REPLACED belongs to the old
+        // one — it must not mark the live watch dead.
+        if (state.kind === "watching" && state.watcher === watcher) state = { kind: "dead", dir, watcher };
         ctx.log?.(`watcher error on ${dir}: ${err}`);
       });
     } catch (err) {
       // dir vanished between resolve and watch — retried on the next sync
-      watchErrored = true;
+      state = { kind: "dead", dir, watcher: null };
       ctx.log?.(`watcher failed on ${dir}: ${err}`);
     }
   };

@@ -182,6 +182,81 @@ describe("makeCwdWatcher", () => {
     expect(watchCalls).toBe(2); // re-armed instead of staying dead
   });
 
+  test("a late error from a REPLACED watcher does not mark the live one dead", () => {
+    // the kernel watch of the previous dir can still deliver its error after
+    // we moved on and armed a new one — that error belongs to the OLD
+    // watcher. The live one must stay armed: re-arming it would close a
+    // healthy watch and churn a new one for nothing.
+    const errorCbs: ((e: unknown) => void)[] = [];
+    let watchCalls = 0;
+    let dir = "/w1";
+    const { syncCwdWatcher } = makeCwdWatcher({
+      cwd: () => dir,
+      isVirtualCwd: () => false,
+      isRenaming: () => false,
+      renderGrid: () => {},
+      watchImpl: (_dir, _cb) => {
+        watchCalls++;
+        return {
+          on: (ev: string, cb: (e: unknown) => void) => {
+            if (ev === "error") errorCbs.push(cb);
+          },
+          close: () => {},
+        };
+      },
+    });
+    syncCwdWatcher(); // arms watcher A on /w1
+    dir = "/w2";
+    syncCwdWatcher(); // replaces it with watcher B
+    errorCbs[0]!(new Error("late error from the replaced watcher"));
+    syncCwdWatcher(); // must NOT re-arm: B is alive
+    expect(watchCalls).toBe(2);
+  });
+
+  test("the watcher follows the cwd: a changed dir re-arms on the NEW dir", () => {
+    // the guard is "watching AND on this dir" — dropping the dir half would
+    // keep the watcher on the OLD dir and every external change in the new
+    // one would be invisible
+    const watched: string[] = [];
+    let dir = "/w1";
+    const { syncCwdWatcher } = makeCwdWatcher({
+      cwd: () => dir,
+      isVirtualCwd: () => false,
+      isRenaming: () => false,
+      renderGrid: () => {},
+      watchImpl: (d, _cb) => {
+        watched.push(d);
+        return { on: () => {}, close: () => {} };
+      },
+    });
+    syncCwdWatcher();
+    dir = "/w2";
+    syncCwdWatcher();
+    expect(watched).toEqual(["/w1", "/w2"]);
+  });
+
+  test("a virtual cwd closes the watcher (a leaked watch pins the event loop)", () => {
+    let closes = 0;
+    let virtual = false;
+    const { syncCwdWatcher } = makeCwdWatcher({
+      cwd: () => (virtual ? "recent://" : "/w"),
+      isVirtualCwd: () => virtual,
+      isRenaming: () => false,
+      renderGrid: () => {},
+      watchImpl: () => ({
+        on: () => {},
+        close: () => {
+          closes++;
+        },
+      }),
+    });
+    syncCwdWatcher();
+    expect(closes).toBe(0);
+    virtual = true;
+    syncCwdWatcher();
+    expect(closes).toBe(1);
+  });
+
   // --- self-write filtering: dlog appends to /tmp/tfm-dnd.log on EVERY mouse
   // event; when cwd is /tmp the watcher sees it and full-rebuilds the grid
   // visibly after each click. Events for our own sink files must not arm the
