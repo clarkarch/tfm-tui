@@ -110,17 +110,22 @@ describe("makeRenderAll", () => {
     expect(state.cwd).toBe("/third");
   });
 
-  test("out-of-range histIdx keeps the current cwd", () => {
+  test("an out-of-range histIdx is RESET, not silently ignored", () => {
     const state = mkState("/a");
     state.histIdx = 99;
+    const logs: string[] = [];
     makeRenderAll({
       state,
       syncTabFromState: () => {},
       scheduleSaveSession: () => {},
-      log: () => {},
+      log: (m) => logs.push(m),
       steps: {},
     })();
-    expect(state.cwd).toBe("/a");
+    // the index was clamped into range — the cwd follows the history
+    expect(state.histIdx).toBe(2);
+    expect(state.cwd).toBe("/third");
+    // and the repair was ANNOUNCED (the old shape kept the cwd silently)
+    expect(logs.some((m) => m.includes("history index"))).toBe(true);
   });
 
   test("a throwing step is logged and the remaining steps still run", () => {

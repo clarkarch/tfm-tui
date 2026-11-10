@@ -12,7 +12,8 @@ import { naturalAscFor } from "../lib/sort";
 import type { Config } from "../config/config";
 import { debounced } from "../lib/uiutil";
 import { readRestoredSession, saveSession, type PaneTabs, type Tab } from "../fs/session";
-import { debugLog } from "../lib/log";
+import { debugLog, appendLog } from "../lib/log";
+import { pushPair, stepPair } from "./history";
 
 export type AppState = {
   cwd: string;
@@ -64,7 +65,11 @@ export const makeNav = (state: AppState, hooks: NavHooks) => {
   // navigate must see them, not just navigate() calls.
   const step = (delta: number): void => {
     if (delta < 0 ? !canBack() : !canFwd()) return;
-    state.histIdx += delta;
+    // the pair's invariant is enforced by its owner (./history): a broken
+    // index is clamped back into range and the repair is announced — the
+    // old step kept the broken index (99 → 98), so every reader silently
+    // kept the old cwd
+    if (stepPair(state, delta)) appendLog(`nav: the history index was out of range — reset to ${state.histIdx}`);
     hooks.renderAll();
     const dir = state.history[state.histIdx];
     if (dir !== undefined) emitNavigate(dir);
@@ -73,9 +78,9 @@ export const makeNav = (state: AppState, hooks: NavHooks) => {
   const goFwd = (): void => step(1);
 
   const pushHistory = (dir: string): void => {
-    state.history = state.history.slice(0, state.histIdx + 1);
-    state.history.push(dir);
-    state.histIdx++;
+    // the same owner: the push clamps FIRST (the old code sliced at a
+    // broken index and kept the gap, so the pair stayed out of range)
+    if (pushPair(state, dir)) appendLog(`nav: the history index was out of range — reset to ${state.histIdx}`);
   };
 
   const emitNavigate = (dir: string): void => {

@@ -204,4 +204,26 @@ describe("the tab model's invariant", () => {
     tabs.syncTabFromState();
     expect(logs).toHaveLength(1);
   });
+
+  test("an adopted tab with an out-of-range history index is clamped", () => {
+    const { logs, log } = withLog();
+    const state = mkState("/tmp/a");
+    const tabs = makeTabs(state, silentHooks(), log);
+    // the tab's own pair is broken — adopting it verbatim would break the
+    // state's pair too
+    tabs.adoptTabs([{ history: ["/tmp/x", "/tmp/y"], histIdx: 99 }], 0);
+    expect(state.histIdx).toBe(1);
+    expect(logs.some((m) => m.includes("history index"))).toBe(true);
+  });
+
+  test("the state pair is clamped before it is copied into the tab", () => {
+    const { logs, log } = withLog();
+    const state = mkState("/tmp/a");
+    state.histIdx = 99;
+    const tabs = makeTabs(state, silentHooks(), log);
+    tabs.syncTabFromState();
+    // the tab must not inherit a broken pair
+    expect(state.histIdx).toBe(0);
+    expect(logs.some((m) => m.includes("history index"))).toBe(true);
+  });
 });

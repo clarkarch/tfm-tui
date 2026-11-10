@@ -11,6 +11,7 @@ import { sharedOpQueue } from "../lib/op-queue";
 import { makeTeardownState } from "../lib/teardown-state";
 import { makeStatus } from "../ui/ui-status";
 import { makeNav, makeSessionSync } from "../app/nav";
+import { readPair } from "../app/history";
 import { saveSessionSync, type PaneTabs } from "../fs/session";
 import { makeTabs, nextTab as cycleNextTab, prevTab as cyclePrevTab } from "../app/tabs";
 import { makeSearch } from "../input/search";
@@ -89,7 +90,13 @@ export const wireNav = (deps: {
     syncTabFromState: () => syncTabsFromState(),
     scheduleSaveSession: () => scheduleSaveSession(),
     syncPaneCwds: () => {
-      for (const s of core.panes.states) s.cwd = s.history[s.histIdx] ?? s.cwd;
+      // every pane's cwd comes from ITS history — and an out-of-range pair
+      // is repaired (and announced), not silently ignored
+      for (const s of core.panes.states) {
+        const { dir, repaired } = readPair(s);
+        if (repaired) appendLog(`render: a pane's history index was out of range — reset to ${s.histIdx}`);
+        s.cwd = dir ?? s.cwd;
+      }
     },
     log: appendLog,
     steps,

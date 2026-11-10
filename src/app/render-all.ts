@@ -7,6 +7,7 @@
 
 import { safeRenderStep } from "../lib/uiutil";
 import { debugLog, isDebug } from "../lib/log";
+import { readPair } from "./history";
 import type { AppState } from "./nav";
 
 // The ONE step order. It was the KEY ORDER of the steps record — an implicit
@@ -64,7 +65,13 @@ export const makeRenderAll = (ctx: RenderAllCtx): RenderAll => {
   const inflight = new Set<Promise<void>>();
   const renderAll = (() => {
     ctx.syncTabFromState();
-    ctx.state.cwd = ctx.state.history[ctx.state.histIdx] ?? ctx.state.cwd;
+    // the history pair's invariant is REPAIRED here, not silently ignored:
+    // the old read was `history[histIdx] ?? cwd`, so an out-of-range index
+    // kept the OLD cwd — the breadcrumb, the grid and the tab chip could
+    // disagree with no log. The repair is announced.
+    const { dir, repaired } = readPair(ctx.state);
+    if (repaired) ctx.log(`render: the history index was out of range — reset to ${ctx.state.histIdx}`);
+    ctx.state.cwd = dir ?? ctx.state.cwd;
     ctx.syncPaneCwds?.();
     for (const name of names) {
       const step = ctx.steps[name];

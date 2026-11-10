@@ -6,6 +6,7 @@
 
 import type { Tab } from "../fs/session";
 import { dlog } from "../lib/log";
+import { clampPair } from "./history";
 
 export type TabStateRef = { history: string[]; histIdx: number; cwd: string };
 
@@ -40,6 +41,10 @@ export const makeTabs = (state: TabStateRef, hooks: TabsHooks, log: (msg: string
   const syncTabFromState = (): void => {
     const t = activeTab();
     if (!t) return;
+    // the state's pair is clamped by its owner (./history) BEFORE it is
+    // copied — a broken index would otherwise be copied INTO the tab (and
+    // back out again on the next adopt)
+    if (clampPair(state)) log("tabs: the history index was out of range — reset");
     t.history = state.history;
     t.histIdx = state.histIdx;
   };
@@ -48,6 +53,9 @@ export const makeTabs = (state: TabStateRef, hooks: TabsHooks, log: (msg: string
     // same shape as syncTabFromState: a missing entry leaves the state alone
     const t = activeTab();
     if (!t) return;
+    // the tab's own pair is clamped before it is adopted — the tab is a
+    // persisted shape (a session file), so its index can be out of range
+    if (clampPair(t)) log("tabs: the adopted tab's history index was out of range — reset");
     state.history = t.history;
     state.histIdx = t.histIdx;
   };

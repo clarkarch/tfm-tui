@@ -68,6 +68,32 @@ describe("makeNav", () => {
     expect(nav.canFwd()).toBe(false);
   });
 
+  test("an out-of-range history index is reset, not silently ignored", () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "tfm-nav-"));
+    const st = mkState("/a");
+    st.history = ["/a", "/b", "/c"];
+    st.histIdx = 99; // a broken pair (a direct write, or a tab adopt)
+    const { hooks } = mkHooks();
+    const nav = makeNav(st, hooks);
+    nav.navigate(dir);
+    // the old push sliced at the BROKEN index and kept the gap: the pair
+    // stayed out of range, so the reader silently kept the old cwd
+    expect(st.histIdx).toBe(3);
+    expect(st.history).toEqual(["/a", "/b", "/c", dir]);
+  });
+
+  test("a step out of a broken index clamps the pair back into range", () => {
+    const st = mkState("/a");
+    st.history = ["/a", "/b", "/c"];
+    st.histIdx = 99;
+    const nav = makeNav(st, mkHooks().hooks);
+    nav.goBack();
+    // the old step kept the broken index (99 → 98); the pair is repaired
+    // first, so the step lands inside the history
+    expect(st.histIdx).toBe(1);
+    expect(st.history[st.histIdx]).toBe("/b");
+  });
+
   test("navigate to a real dir pushes history, clears search, repaints", () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), "tfm-nav-"));
     const st = mkState("/elsewhere");
