@@ -5,7 +5,6 @@
 // isolates per plugin. ---
 
 import { Text } from "@opentui/core";
-import { errMessage } from "../lib/uiutil";
 import { stickyClose } from "../ui/notify";
 import path from "node:path";
 import pkg from "../../package.json";
@@ -23,28 +22,9 @@ import { makePluginRegistry, makePluginStore, pluginsDir } from "../plugins/plug
 import { PLUGINS_ENABLED } from "../plugins/plugin-gate";
 import type { CoreWiring } from "./core";
 import type { ChromeWiring, GridFoundationWiring, NavWiring } from "./types";
+import { tdzSafe } from "./late-slot";
 
 export type PluginsWiring = Awaited<ReturnType<typeof wirePlugins>>;
-
-// TDZ-safe late-cluster reader: getKeymap/getPick close over wirings that
-// initialize AFTER the first plugin scan (an eager plugin calling
-// api.commands()/ui.pick at activate top level would otherwise throw a
-// ReferenceError and fail its own load). The fallback only ever surfaces
-// pre-boot; lazy post-boot calls see the real values.
-export const tdzSafe = <T>(get: () => T, fallback: T): (() => T) => {
-  return () => {
-    try {
-      return get();
-    } catch (err) {
-      // pre-boot eager calls legitimately hit this; a dlog keeps a REAL
-      // wiring-order bug honest instead of a silent fallback forever
-      try {
-        dlog(`tdzSafe fallback: ${errMessage(err)}`);
-      } catch {}
-      return fallback;
-    }
-  };
-};
 
 export const wirePlugins = async (deps: {
   core: CoreWiring;

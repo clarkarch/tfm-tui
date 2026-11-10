@@ -38,6 +38,7 @@ import { destroyChildren, errMessage, type Cursor } from "../lib/uiutil";
 import { dlog, debugLog } from "../lib/log";
 import type { CoreWiring } from "./core";
 import type { FileopsWiring, GridWiring, NavWiring } from "./types";
+import { makeLateSlot } from "./late-slot";
 
 export const wireChrome = async (deps: {
   core: CoreWiring;
@@ -124,21 +125,23 @@ export const wireChrome = async (deps: {
   });
 
   // --- Network locations: "+ → connect" calls land here. The impls are
-  // assigned further down (they need notify); the wrappers only defer, and
-  // nothing invokes them before the wiring returns (TDZ seam rule). ---
-  let connectServerImpl: (raw?: string) => Promise<void> = async () => {};
-  let disconnectServerImpl: (mountPath: string) => Promise<void> = async () => {};
+  // assigned further down (they need notify); the SLOTS stay unset until
+  // then — a call that lands before the assignment LOGS instead of
+  // silently doing nothing (a no-op stub made "not assigned" and
+  // "legitimately does nothing" the same value). ---
+  const connectServerSlot = makeLateSlot<(raw?: string) => Promise<void>>("connectServer", dlog);
+  const disconnectServerSlot = makeLateSlot<(mountPath: string) => Promise<void>>("disconnectServer", dlog);
   const connectServer = (raw?: string): void => {
-    void connectServerImpl(raw);
+    void connectServerSlot.call(raw);
   };
   const disconnectServer = (mountPath: string): void => {
-    void disconnectServerImpl(mountPath);
+    void disconnectServerSlot.call(mountPath);
   };
 
   // --- Sidebar row hover nudge (per-row icon lift for every place/pin/device
-  // row). The impl is assigned below (it reads chrome.placesHost); the wrapper
-  // only defers — same TDZ seam as the network impls above. ---
-  let hoverRowImpl: (key: string, hovered: boolean) => void = () => {};
+  // row). The impl is assigned below (it reads chrome.placesHost); the slot
+  // stays unset until then — same TDZ seam as the network slots above. ---
+  const hoverRowSlot = makeLateSlot<(key: string, hovered: boolean) => void>("hoverRow", dlog);
 
   // --- Places sidebar + tab strip — widget lives in ./ui-chrome ---
   const chrome = makeChrome({
@@ -197,7 +200,7 @@ export const wireChrome = async (deps: {
     notify,
     home: () => home,
     connectServer,
-    hoverRow: (key, hovered) => hoverRowImpl(key, hovered),
+    hoverRow: (key, hovered) => hoverRowSlot.call(key, hovered),
     // mounts-refresh rebuild (below) replays the boot intro on fresh nodes
     replaySidebarIntro: () => replaySidebarIntro(),
     setPointer,
@@ -231,7 +234,7 @@ export const wireChrome = async (deps: {
       includeLabel: core.config.ui.sidebarHoverIncludeLabel,
     }),
   });
-  hoverRowImpl = (key, hovered) => sidebarHover.playHover(key, hovered);
+  hoverRowSlot.assign((key, hovered) => sidebarHover.playHover(key, hovered));
   // a modal taking the screen must drop sidebar hover state: the row nudge
   // (release) AND the hover Bg, which normalizePlaces keys off the hovered
   // PLACE (clearMousePlace resets it + repaints), or the row stays tinted behind the dim
@@ -633,7 +636,7 @@ export const wireChrome = async (deps: {
     log: dlog,
   });
 
-  connectServerImpl = async (raw?: string): Promise<void> => {
+  connectServerSlot.assign(async (raw?: string): Promise<void> => {
     // fail fast when gio is absent (minimal/container distros) — otherwise
     // the URL prompt opens first and only the mount spawn fails afterwards
     if (!whichLive("gio")) {
@@ -655,9 +658,9 @@ export const wireChrome = async (deps: {
     await loadSystemPlaces();
     nav.renderAll();
     nav.navigate(mountPath);
-  };
+  });
 
-  disconnectServerImpl = async (mountPath: string): Promise<void> => {
+  disconnectServerSlot.assign(async (mountPath: string): Promise<void> => {
     if (!whichLive("gio")) {
       notify("Can't disconnect · gio missing", "network", "error");
       return;
@@ -670,7 +673,7 @@ export const wireChrome = async (deps: {
     if (!ok) return;
     await loadSystemPlaces();
     nav.renderAll();
-  };
+  });
 
   return {
     renderer,

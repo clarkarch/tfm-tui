@@ -28,4 +28,17 @@ describe("the chrome wiring's path-edit registry", () => {
     // and the app-wide predicate reads the same registry
     expect(src.includes("pathEditPeers.some((peer) => peer.isOpen())")).toBe(true);
   });
+
+  test("the late-bound impls are SLOTS, not no-op stubs", async () => {
+    const src = (await Bun.file(`${import.meta.dir}/chrome.ts`).text())
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/\/\/[^\n]*/g, "");
+    // the three impls that are assigned AFTER the consumer that captures
+    // them (connect / disconnect server, the sidebar hover) live in slots
+    expect(src.match(/makeLateSlot</g)?.length ?? 0).toBe(3);
+    // a slot is never INITIALIZED with a no-op function: "not yet assigned"
+    // must be an explicit state, or a pre-assignment call silently does
+    // nothing (no toast, no log)
+    expect(/=\s*(async\s*)?\(\)\s*=>\s*\{\}/.test(src)).toBe(false);
+  });
 });

@@ -2,7 +2,8 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { tdzSafe, wirePlugins } from "./plugins";
+import { wirePlugins } from "./plugins";
+import { tdzSafe } from "./late-slot";
 
 describe("tdzSafe", () => {
   test("passes the getter value through when healthy", () => {
