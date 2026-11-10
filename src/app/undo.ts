@@ -24,6 +24,29 @@ import {
 
 type OpBatch = { label: string; units: UndoUnit[]; redos: UndoUnit[] };
 
+// an undo/redo stack entry: the batch plus its journal data alongside
+// (null = session-only, pushed without data — fully undoable in memory,
+// skipped by snapshotData)
+type UndoEntry = { batch: OpBatch; data: UndoBatchData | null };
+
+// The in-flight op: ONE object with an explicit phase. The old shape was
+// THREE facts about one op — a bare `running` boolean, the popped entry
+// (held in a closure) and the re-push that landed at the end of the async
+// body — and the re-push could land AFTER a fresh op had forked the
+// history, resurrecting a stale entry on the redo stack.
+//
+//   "popped"  — the entry is off the stack; the batch has not started
+//   "running" — the batch is on the shared op queue
+//   "settled" — the outcome is known; the op may (re-)enter a stack
+type UndoOp = {
+  phase: "popped" | "running" | "settled";
+  entry: UndoEntry;
+  // the history's version when the op popped its entry: a fresh op pushed
+  // while this one was in flight forks the history, and a forked history
+  // must not take the op's entry back
+  version: number;
+};
+
 export type UndoSink = {
   notify: (message: string, title?: string, level?: NotifyLevel) => void;
   renderAll: () => void;
@@ -48,12 +71,19 @@ type UndoOpts = {
 export const makeUndo = (sink: UndoSink, opts: UndoOpts = {}) => {
   const log = opts.log ?? (() => {});
   const onChange = opts.onChange ?? (() => {});
-  let running = false; // in-flight undo/redo guard: no interleaved batches
+  // the in-flight op (null = idle). ONE record: the old `running` boolean
+  // could not say WHICH op was in flight, and the popped entry lived in a
+  // closure — the re-push that came with it could land after a fresh op
+  // had already forked the history.
+  let inflight: UndoOp | null = null;
+  // the history's version: every fresh action forks the history (it clears
+  // the redo stack) and bumps this, so an op that settles late can tell
+  // that the chain it was holding is gone
+  let historyVersion = 0;
   // undo/redo entries with their journal data alongside (null = session-only,
   // pushed without data — fully undoable in memory, skipped by snapshotData)
-  const undoStack: { batch: OpBatch; data: UndoBatchData | null }[] = [];
-  const redoStack: { batch: OpBatch; data: UndoBatchData | null }[] = [];
-
+  const undoStack: UndoEntry[] = [];
+  const redoStack: UndoEntry[] = [];
   const pushUndoBatch = (label: string, units: UndoUnit[], redos: UndoUnit[] = [], data?: UndoJournalData): void => {
     if (!units.length) return;
     undoStack.push({
@@ -62,6 +92,7 @@ export const makeUndo = (sink: UndoSink, opts: UndoOpts = {}) => {
     });
     if (undoStack.length > MAX_UNDO_BATCHES) undoStack.shift();
     redoStack.length = 0; // a fresh action forks history — stale redos are gone
+    historyVersion++; // the fork: an op in flight can no longer re-enter a stack
     onChange();
   };
 
@@ -102,53 +133,83 @@ export const makeUndo = (sink: UndoSink, opts: UndoOpts = {}) => {
     return { failed, failWhy };
   };
 
+  // An op may start only while no op is in flight. The slot keeps the LAST
+  // op (the guard reads its phase), so a settled op never blocks the next
+  // one — the old `running` boolean did the same, but it could not say which
+  // op it was guarding.
+  const busy = (): boolean => inflight !== null && inflight.phase !== "settled";
+
+  // The op SETTLES: the outcome is known, so it may re-enter a stack.
+  //
+  // It may re-enter ONLY while the history was not forked meanwhile: a
+  // fresh op pushed during the op's window already invalidated the chain
+  // (it cleared the redo stack), so the stale entry must NOT come back — a
+  // resurrected redo would re-apply an op that a newer op had already
+  // invalidated, and a resurrected undo entry would invert the undo order
+  // (the older entry would be popped before the newer one).
+  const settle = (op: UndoOp, kind: "undo" | "redo", failed: number, failWhy: Set<string>): void => {
+    op.phase = "settled";
+    const entry = op.entry;
+    if (op.version === historyVersion) {
+      if (kind === "undo") {
+        // only batches that know how to re-apply themselves stay redoable
+        if (entry.batch.redos.length) redoStack.push(entry);
+      } else {
+        undoStack.push(entry);
+      }
+    }
+    // the plugin event fires when the op has SETTLED: a plugin that reads
+    // the fs in its handler must see the POST-op state, not the pre-op one
+    emit(kind, entry.batch.label);
+    sink.renderAll();
+    const verb = kind === "undo" ? "Undo" : "Redo";
+    const done = kind === "undo" ? "Undid" : "Redid";
+    const summary = failed
+      ? `${verb} ${entry.batch.label} · ${failSuffix(failed, failWhy)}`
+      : `${done} ${entry.batch.label}`;
+    sink.notify(summary, failed ? `${kind} failed` : kind, failed ? "error" : "success");
+    onChange();
+  };
+
   const undoLast = (): void => {
-    if (running) return; // in-flight fs closures must not interleave
+    if (busy()) return; // in-flight fs closures must not interleave
     const entry = undoStack.pop();
     if (!entry) {
       noteEmpty("undo");
       return;
     }
-    emit("undo", entry.batch.label);
-    running = true;
+    // ONE op object owns the popped entry from here on
+    const op: UndoOp = { phase: "popped", entry, version: historyVersion };
+    inflight = op;
     void (async () => {
+      op.phase = "running";
       try {
         const { failed, failWhy } = await runBatch([...entry.batch.units].reverse());
-        // only batches that know how to re-apply themselves stay redoable
-        if (entry.batch.redos.length) redoStack.push(entry);
-        sink.renderAll();
-        const summary = failed
-          ? `Undo ${entry.batch.label} · ${failSuffix(failed, failWhy)}`
-          : `Undid ${entry.batch.label}`;
-        sink.notify(summary, failed ? "undo failed" : "undo", failed ? "error" : "success");
-        onChange();
+        settle(op, "undo", failed, failWhy);
       } finally {
-        running = false;
+        // the op always settles (even if the batch runner itself threw): a
+        // stuck "running" phase would block every later undo
+        op.phase = "settled";
       }
     })();
   };
 
   const redoLast = (): void => {
-    if (running) return;
+    if (busy()) return;
     const entry = redoStack.pop();
     if (!entry) {
       noteEmpty("redo");
       return;
     }
-    emit("redo", entry.batch.label);
-    running = true;
+    const op: UndoOp = { phase: "popped", entry, version: historyVersion };
+    inflight = op;
     void (async () => {
+      op.phase = "running";
       try {
         const { failed, failWhy } = await runBatch(entry.batch.redos);
-        undoStack.push(entry);
-        sink.renderAll();
-        const summary = failed
-          ? `Redo ${entry.batch.label} · ${failSuffix(failed, failWhy)}`
-          : `Redid ${entry.batch.label}`;
-        sink.notify(summary, failed ? "redo failed" : "redo", failed ? "error" : "success");
-        onChange();
+        settle(op, "redo", failed, failWhy);
       } finally {
-        running = false;
+        op.phase = "settled";
       }
     })();
   };
@@ -163,6 +224,7 @@ export const makeUndo = (sink: UndoSink, opts: UndoOpts = {}) => {
     }
     if (undoStack.length > MAX_UNDO_BATCHES) undoStack.splice(0, undoStack.length - MAX_UNDO_BATCHES);
     redoStack.length = 0;
+    historyVersion++; // adopting a journal is a history fork too
     if (fresh.length) onChange();
     return fresh.length;
   };

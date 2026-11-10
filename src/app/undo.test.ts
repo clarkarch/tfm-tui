@@ -72,7 +72,7 @@ describe("makeUndo", () => {
     await settleUntil(() => ran.includes("redo-unit"));
   });
 
-  test("onEvent fires with the batch label on pop, silent on empty stacks", async () => {
+  test("onEvent fires when the batch SETTLES, silent on empty stacks", async () => {
     const events: Array<{ op: string; label: string }> = [];
     const sink = recordingSink();
     const undo = makeUndo({ ...sink, onEvent: (op, label) => events.push({ op, label }) });
@@ -82,13 +82,74 @@ describe("makeUndo", () => {
     expect(events).toEqual([]);
     undo.pushUndoBatch("op", [() => {}], [() => {}]);
     undo.undoLast();
-    expect(events).toEqual([{ op: "undo", label: "op" }]);
+    // the event fires when the batch settles — a plugin that reads the fs in
+    // its handler must see the POST-undo state, not the pre-undo one
+    expect(events).toEqual([]);
     await settleUntil(() => undo.redoDepth() === 1);
+    expect(events).toEqual([{ op: "undo", label: "op" }]);
     undo.redoLast();
+    await settleUntil(() => undo.undoDepth() === 1);
     expect(events).toEqual([
       { op: "undo", label: "op" },
       { op: "redo", label: "op" },
     ]);
+  });
+
+  test("an op queued during an undo invalidates the redo chain", async () => {
+    // The undo pops its entry BEFORE the batch runs, so a fresh op can land
+    // in that window. The fresh op forks the history (it clears the redo
+    // stack) — but the undo's own re-push used to land AFTER that clear and
+    // resurrect the stale entry: ctrl+y then re-applied an op that a newer
+    // op had already invalidated.
+    const sink = recordingSink();
+    const undo = makeUndo(sink);
+    undo.pushUndoBatch("first", [() => {}], [() => {}]);
+    // hold the shared queue so the undo's batch stays parked
+    let release!: () => void;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const held = sharedOpQueue().enqueue(() => gate);
+    undo.undoLast(); // pops "first", its batch waits on the queue
+    try {
+      // a FRESH op lands while the undo is in flight — it forks the history
+      undo.pushUndoBatch("fresh", [() => {}]);
+    } finally {
+      release();
+    }
+    await held;
+    await settleUntil(() => sink.notes.some((n) => n.startsWith("notify:undo:")));
+    // the stale entry must NOT come back: the redo chain stays broken
+    expect(undo.redoDepth()).toBe(0);
+    // the fresh op is still undoable
+    expect(undo.undoDepth()).toBe(1);
+  });
+
+  test("an op queued during a redo does not put the stale entry back on the undo stack", async () => {
+    // The mirror image: the redone entry is OLDER than the fresh op, so
+    // re-adding it on top would make the next ctrl+z pop the stale one
+    // first — the undo order would be inverted.
+    const sink = recordingSink();
+    const undo = makeUndo(sink);
+    undo.pushUndoBatch("first", [() => {}], [() => {}]);
+    undo.undoLast();
+    await settleUntil(() => undo.redoDepth() === 1);
+    // hold the shared queue so the redo's batch stays parked
+    let release!: () => void;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const held = sharedOpQueue().enqueue(() => gate);
+    undo.redoLast(); // pops "first" from the redo stack, its batch waits
+    try {
+      undo.pushUndoBatch("fresh", [() => {}]); // forks the history
+    } finally {
+      release();
+    }
+    await held;
+    await settleUntil(() => sink.notes.some((n) => n.startsWith("notify:redo:")));
+    // only the fresh op is left — the redone entry does not come back
+    expect(undo.undoDepth()).toBe(1);
   });
 
   test("a fresh push clears stale redos (history fork)", async () => {

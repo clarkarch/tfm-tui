@@ -10,7 +10,9 @@ export type PluginEventName = "navigate" | "selection" | "file-op" | "trash" | "
 // op vocabularies (match on these, never on core internals):
 // - file-op: "copy" | "move" | "rename" (+ outcome on every completion)
 // - trash: "trash" | "restore" | "delete-forever" | "empty"
-// - undo: "undo" | "redo" (only on an actual pop — empty stacks stay silent)
+// - undo: "undo" | "redo" (only on an actual pop — empty stacks stay
+//   silent; the event fires when the op SETTLES, so a plugin that reads
+//   the fs in its handler sees the post-op state)
 export type PluginEventPayload = {
   navigate: { dir: string };
   selection: { paths: string[] };
