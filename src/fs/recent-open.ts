@@ -10,17 +10,22 @@ import { debounced } from "../lib/uiutil";
 import { canReadSync } from "./fsutil";
 import { isArchiveUri } from "./uri";
 import { classifyPath, type ExecutableInfo } from "./executable";
+import type { SpawnOutcome } from "./spawn-safe";
 import type { NotifyLevel } from "../lib/notify-level";
 
+// The open's OUTCOME — settled ONCE. The old shape carried the spawn's fate
+// in a callback that wrote a boolean, and the toast's writer raced that
+// boolean against the app probe: a failure landing AFTER the probe answered
+// produced BOTH the optimistic "Opening …" toast and the failure toast. A
+// promise settles once, so the seam cannot deliver two answers, and the
+// toast is decided by the outcome alone.
 type RecentOpenCtx = {
   inTrashView: () => boolean;
   notify: (msg: string, title?: string, level?: NotifyLevel) => void;
   upsertRecent: (paths: string[]) => void | Promise<void>;
-  // onFailed fires when the spawn itself fails (missing binary etc.) so the
-  // optimistic Opening toast below can stand down — a failure toast already
-  // went out. (Success-first ordering can still double-toast: the spawn is
-  // fire-and-forget by design, so a late failure reads as a correction.)
-  spawnOpen: (p: string, onFailed: () => void) => void;
+  // the spawn's fate: the spawn either started (ok) or failed with a reason.
+  // It settles ONCE — the caller decides the toast from it.
+  spawnOpen: (p: string) => Promise<SpawnOutcome>;
   appForFile: (p: string) => Promise<string | null>;
   // readability pre-check (tests fake it; default = R_OK probe). Unreadable
   // files escalate through openAsRoot instead of erroring — the open is
@@ -85,15 +90,24 @@ export const makeRecentOpen = (ctx: RecentOpenCtx) => {
 
   const doSpawnOpen = (p: string): void => {
     recordOpen(p);
-    let failed = false;
-    ctx.spawnOpen(p, () => {
-      failed = true;
-    });
-    // resolve what xdg-open will pick so the toast can say what launched
+    const base = path.basename(p);
+    // the spawn starts SYNCHRONOUSLY (the open is the point) and the app
+    // probe runs CONCURRENTLY — its latency overlaps the spawn's, and it
+    // never blocks the failure path
+    const spawnPromise = ctx.spawnOpen(p);
     void (async () => {
-      const base = path.basename(p);
-      const app = await ctx.appForFile(p);
-      if (!failed) ctx.notify(`Opening ${base}${app ? ` · ${app}` : ""}`, "open", "info");
+      const appPromise = ctx.appForFile(p).catch(() => null);
+      const spawn = await spawnPromise;
+      if (!spawn.ok) {
+        // ONE toast for a failed open: the error REPLACES the optimistic
+        // "Opening …" (the old shape could show both)
+        ctx.notify(`Can't open ${base} · ${spawn.reason}`, "open", "error");
+        return;
+      }
+      // the app name rides the same settlement — the probe answered, so the
+      // toast can name what launched
+      const app = await appPromise;
+      ctx.notify(`Opening ${base}${app ? ` · ${app}` : ""}`, "open", "info");
     })();
   };
 

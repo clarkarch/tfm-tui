@@ -28,6 +28,9 @@ export type SpawnSafeOpts = {
       ];
   detached?: boolean;
   timeoutMs?: number;
+  // unref the child so it does not pin the event loop (fire-and-forget
+  // helpers like xdg-open)
+  unref?: boolean;
 };
 
 type SpawnFail = (err: Error) => void;
@@ -40,7 +43,7 @@ export const spawnSafe = (
   opts: SpawnSafeOpts = {},
   onFail: SpawnFail = () => {},
 ): Subprocess | null => {
-  const { timeoutMs, detached: _detached, ...rest } = opts;
+  const { timeoutMs, detached: _detached, unref: doUnref, ...rest } = opts;
   void _detached;
   // string form ("ignore") applies to all three fds, like node SpawnOptions
   const stdio: readonly [
@@ -61,6 +64,8 @@ export const spawnSafe = (
     onFail(err instanceof Error ? err : new Error(String(err)));
     return null;
   }
+  // the child must not pin the event loop (fire-and-forget helpers)
+  if (doUnref) proc.unref();
   // awaited flows (mount/unmount) need a backstop: a wedged helper otherwise
   // never resolves, never toasts, never dies
   if (timeoutMs && timeoutMs > 0) {
@@ -79,3 +84,25 @@ export const spawnSafe = (
   }
   return proc;
 };
+
+// The spawn's FATE, settled ONCE: the spawn either started (ok) or failed
+// with the error's message. Bun.spawn throws SYNCHRONOUSLY on a missing
+// binary, so the promise settles in the same tick — and a promise settles
+// once, so a caller can never receive two answers (the old callback shape
+// could: a "failed" callback arriving after the caller had already moved on
+// was a second, contradictory answer).
+export type SpawnOutcome = { ok: true } | { ok: false; reason: string };
+
+export const spawnOutcome = (
+  cmd: string,
+  args: string[],
+  opts: SpawnSafeOpts = {},
+  onFail?: (err: Error) => void,
+): Promise<SpawnOutcome> =>
+  new Promise((resolve) => {
+    const proc = spawnSafe(cmd, args, opts, (err) => {
+      onFail?.(err);
+      resolve({ ok: false, reason: err.message });
+    });
+    if (proc) resolve({ ok: true });
+  });

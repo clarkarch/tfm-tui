@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { spawnSafe } from "./spawn-safe";
+import { spawnOutcome, spawnSafe } from "./spawn-safe";
 
 // Bun.spawn-backed spawnSafe. Contract (same as the node version, pinned):
 // a missing binary NEVER throws and NEVER fires an async uncaughtException —
@@ -7,6 +7,29 @@ import { spawnSafe } from "./spawn-safe";
 // without xdg-open kills the whole TUI. Differences from node: onFail fires
 // SYNCHRONOUSLY (Bun.spawn throws sync, there is no async error event), so
 // callers null-guard instead of relying on a later event.
+
+describe("spawnOutcome", () => {
+  test("a missing binary resolves as FAILED with the reason (never throws)", async () => {
+    // the failure's REASON travels with the outcome — the old callback shape
+    // carried a bare boolean and the caller had to invent the message
+    const outcome = await spawnOutcome("tfm-no-such-binary-xyz", [], { stdio: "ignore" });
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) throw new Error("expected a failure");
+    expect(outcome.reason.length).toBeGreaterThan(0);
+  });
+
+  test("a spawned binary resolves as ok", async () => {
+    const outcome = await spawnOutcome(process.execPath, ["--version"], { stdio: "ignore", unref: true });
+    expect(outcome).toEqual({ ok: true });
+  });
+
+  test("the failure is reported ONCE (the onFail hook runs once)", async () => {
+    const errs: Error[] = [];
+    const outcome = await spawnOutcome("tfm-no-such-binary-xyz", [], { stdio: "ignore" }, (e) => errs.push(e));
+    expect(outcome.ok).toBe(false);
+    expect(errs.length).toBe(1);
+  });
+});
 
 describe("spawnSafe", () => {
   test("missing binary reports through onFail and returns null (never throws)", () => {

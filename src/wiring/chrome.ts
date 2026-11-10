@@ -10,7 +10,7 @@ import path from "node:path";
 import { PassThrough } from "node:stream";
 import { startGpmInput } from "../fs/gpm";
 import { readdir } from "node:fs/promises";
-import { spawnSafe } from "../fs/spawn-safe";
+import { spawnOutcome } from "../fs/spawn-safe";
 import { whichLive } from "../fs/which";
 import { loadSystemPlaces } from "../fs/places";
 import { buildMountArgs, buildUnmountArgs, gvfsRoot, takeGioPrompt, type GioPrompt } from "../fs/network";
@@ -492,13 +492,14 @@ export const wireChrome = async (deps: {
     inTrashView: core.inTrashView,
     notify,
     upsertRecent: upsertRecentXbel,
-    spawnOpen: (p, onFailed) => {
-      spawnSafe("xdg-open", [p], { stdio: "ignore", detached: true }, (err) => {
-        onFailed();
+    spawnOpen: (p) =>
+      // the spawn's fate, settled ONCE (spawnOutcome): spawnSafe reports a
+      // missing binary SYNCHRONOUSLY (Bun.spawn throws), so the promise
+      // settles in the same tick. The wiring reports the FACT; the open
+      // pipeline owns the message.
+      spawnOutcome("xdg-open", [p], { stdio: "ignore", detached: true, unref: true }, (err) => {
         dlog(`open ${p}: ${err.message}`);
-        notify(`Can't open ${path.basename(p)} · ${err.message}`, "open", "error");
-      })?.unref();
-    },
+      }),
     appForFile,
     openAsRoot,
     isExecutable: classifyPath,
