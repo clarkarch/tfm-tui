@@ -129,23 +129,56 @@ export const gpmEventToSgr = (ev: GpmEvent): string | null => {
 // last pressed button and synthesizes the release from it; a reported button
 // always wins. One slot is enough (single pointer); an interleaved second
 // DOWN overwrites it and any release clears it.
-export const makeGpmTranslator = (): ((ev: GpmEvent) => string | null) => {
-  let lastDown: number | null = null;
+//
+// The memory EXPIRES: the daemon's UP can be LOST, and a memory armed
+// forever turns the NEXT bare UP into a PHANTOM release (it ends a drag that
+// is not there, commits a deferred ctrl-toggle). `at` is the last time the
+// button was observed HELD — the press itself, or a drag/motion frame that
+// carried it — so an ACTIVE press keeps its release (a long drag, gpm's 1 Hz
+// heartbeat) while an idle, forgotten one ages out.
+const GPM_PRESS_MEMORY_MS = 10_000;
+
+export type GpmTranslatorOpts = {
+  // injectable clock — the staleness bound is a timing unit, so the tests
+  // drive a virtual one instead of sleeping
+  now?: () => number;
+  // how long a press memory stays usable (ms)
+  staleMs?: number;
+};
+
+export const makeGpmTranslator = (opts: GpmTranslatorOpts = {}): ((ev: GpmEvent) => string | null) => {
+  const now = opts.now ?? (() => Date.now());
+  const staleMs = opts.staleMs ?? GPM_PRESS_MEMORY_MS;
+  let lastDown: { button: number; at: number } | null = null;
+  // the memory is usable only while it is fresh; a stale one is DROPPED
+  // (never reported as a release of a press we forgot)
+  const freshMemory = (): { button: number; at: number } | null => {
+    if (!lastDown) return null;
+    if (now() - lastDown.at <= staleMs) return lastDown;
+    lastDown = null;
+    return null;
+  };
   return (ev: GpmEvent): string | null => {
     if (ev.type & GPM_DOWN) {
       const b = primaryButton(ev.buttons);
       if (b === 3) return null;
-      lastDown = b;
+      lastDown = { button: b, at: now() };
       return gpmEventToSgr(ev);
     }
     if (ev.type & GPM_UP) {
       const b = primaryButton(ev.buttons);
-      const release = b === 3 ? lastDown : b;
+      const release = b === 3 ? (freshMemory()?.button ?? null) : b;
       lastDown = null;
       if (release === null) return null;
       const mask = [GPM_B_LEFT, GPM_B_MIDDLE, GPM_B_RIGHT][release];
       if (mask === undefined) return null;
       return gpmEventToSgr({ ...ev, buttons: mask });
+    }
+    // a motion/drag frame that still carries the button means the press is
+    // ALIVE — refresh its age so a long drag keeps its release
+    if (lastDown) {
+      const mask = [GPM_B_LEFT, GPM_B_MIDDLE, GPM_B_RIGHT][lastDown.button];
+      if (mask !== undefined && ev.buttons & mask) lastDown.at = now();
     }
     return gpmEventToSgr(ev);
   };

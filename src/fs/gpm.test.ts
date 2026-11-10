@@ -338,4 +338,26 @@ describe("makeGpmTranslator", () => {
     expect(t({ ...parsedDown(), buttons: GPM_B_RIGHT })).toBe("\x1b[<2;5;3M");
     expect(t({ ...parsedDown(), buttons: 0, type: GPM_UP })).toBe("\x1b[<2;5;3m");
   });
+
+  test("a stale press memory does not emit a phantom release", () => {
+    // the daemon's UP can be LOST — the memory then stayed armed FOREVER and
+    // the NEXT bare UP (no button reported) became a phantom release: it ends
+    // a drag that is not there / commits a deferred ctrl-toggle
+    let clock = 1000;
+    const t = makeGpmTranslator({ now: () => clock });
+    expect(t({ ...parsedDown(), buttons: GPM_B_LEFT })).toBe("\x1b[<0;5;3M");
+    clock += 60_000; // the press was forgotten long ago
+    expect(t({ ...parsedDown(), buttons: 0, type: GPM_UP })).toBeNull();
+  });
+
+  test("an ACTIVE press keeps its release (the memory is refreshed while the button is held)", () => {
+    // a long drag's frames carry the held button — the press is still ours,
+    // so its release must still be reported, however long the drag took
+    let clock = 1000;
+    const t = makeGpmTranslator({ now: () => clock });
+    expect(t({ ...parsedDown(), buttons: GPM_B_LEFT })).toBe("\x1b[<0;5;3M");
+    clock += 60_000; // a long drag: the frames keep carrying the held button
+    expect(t({ ...parsedDown(), buttons: GPM_B_LEFT, type: GPM_DRAG })).toBe("\x1b[<32;5;3M");
+    expect(t({ ...parsedDown(), buttons: 0, type: GPM_UP })).toBe("\x1b[<0;5;3m");
+  });
 });
