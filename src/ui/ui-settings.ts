@@ -523,8 +523,8 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
         : row.kind === "stepper"
           ? fitValueText(row.fmt(row.get()), SET_VAL_W - 1)
           : (() => {
-              const i = row.getIdx();
-              const name = i >= 0 ? (row.names[i] ?? "?") : (row.customLabel?.() ?? "custom");
+              const sel = row.get();
+              const name = sel.kind === "index" ? (row.names[sel.index] ?? "?") : sel.label;
               return fitValueText(name, SET_VAL_W - 1);
             })();
     setOnId(`tfm-set-rowv-${index}`, (n) => {

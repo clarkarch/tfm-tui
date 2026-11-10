@@ -17,8 +17,10 @@ import {
 } from "./settings";
 import { configPath, defaultConfig, type Config, type UiConfig } from "../config/config";
 import {
+  GATED_MASTERS,
   KEY_SCHEMA,
   UI_SCHEMA,
+  gateAllows,
   keybindConflict,
   swapKeybind,
   type KeyAction,
@@ -158,7 +160,13 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
           blurb: row.blurb,
           ...(row.restart ? { restart: true as const } : {}),
           names: [...row.values],
-          getIdx: () => row.values.indexOf(String(ui[row.prop] ?? row.def)),
+          get: () => {
+            const cur = String(ui[row.prop] ?? row.def);
+            const i = row.values.indexOf(cur);
+            // a value that matches no name is its own state (the label says
+            // what it is) — never a magic index
+            return i >= 0 ? { kind: "index", index: i } : { kind: "custom", label: cur };
+          },
           setIdx: (i) => commitUi({ [row.prop]: row.values[i] } as Partial<UiConfig>),
         };
     }
@@ -218,17 +226,26 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
     // matter the preset, so adjusting warns instead of committing (config is
     // still stored, and applies back on a graphical terminal).
     const names = ["System", ...THEME_PRESETS.map((p) => p.name)];
+    // hand-edited themes match no preset: name the nearest one with a ~
+    // prefix (picking any preset returns to an exact match). On the console
+    // the static palette is named instead.
+    const customLabel = (): string => {
+      if (ctx.isTtyMode?.()) return isDark(ctx.config.theme.bg) ? "Console" : "Console Light";
+      const n = settingsThemeNearestIdx(THEME_PRESETS, ctx.config.theme);
+      const near = n >= 0 ? THEME_PRESETS[n] : undefined;
+      return near ? `~${near.name}` : "custom";
+    };
     return {
       kind: "cycle",
       label: "theme",
       blurb: "Pick a look, or follow your terminal",
       repaint: true,
       names,
-      getIdx: () => {
-        if (ctx.isTtyMode?.()) return -1;
-        if (ctx.config.ui.followTerminal) return 0;
+      get: () => {
+        if (ctx.isTtyMode?.()) return { kind: "custom", label: customLabel() };
+        if (ctx.config.ui.followTerminal) return { kind: "index", index: 0 };
         const i = themePresetIdx();
-        return i < 0 ? -1 : i + 1;
+        return i < 0 ? { kind: "custom", label: customLabel() } : { kind: "index", index: i + 1 };
       },
       setIdx: (i) => {
         if (ctx.isTtyMode?.()) {
@@ -260,15 +277,6 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
         // System and apply an OLD terminal palette.
         ctx.resolveSystemTheme?.();
       },
-      // hand-edited themes match no preset: name the nearest one with a ~
-      // prefix (picking any preset returns to an exact match). On the console
-      // the static palette is named instead.
-      customLabel: () => {
-        if (ctx.isTtyMode?.()) return isDark(ctx.config.theme.bg) ? "Console" : "Console Light";
-        const n = settingsThemeNearestIdx(THEME_PRESETS, ctx.config.theme);
-        const near = n >= 0 ? THEME_PRESETS[n] : undefined;
-        return near ? `~${near.name}` : "custom";
-      },
     };
   };
 
@@ -291,7 +299,7 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
     label: "tab bar",
     blurb: "Always show the tab strip",
     names: ["adaptive", "on"],
-    getIdx: () => (ctx.config.ui.tabBar ? 1 : 0),
+    get: () => ({ kind: "index", index: ctx.config.ui.tabBar ? 1 : 0 }),
     setIdx: (i) => commitUi({ tabBar: i === 1 }),
   });
   // one row for the whole default-file-manager story (advanced, directly under
@@ -350,7 +358,12 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
     // without this the new binds appear only as rows scroll into view)
     repaint: true,
     names: [...KEYMAP_PRESET_NAMES],
-    getIdx: () => keymapPresetIdx(ctx.config.keys),
+    get: () => {
+      const i = keymapPresetIdx(ctx.config.keys);
+      // hand-edited binds match no preset — the row says so instead of
+      // answering a magic index
+      return i >= 0 ? { kind: "index", index: i } : { kind: "custom", label: "custom" };
+    },
     setIdx: (i) => {
       const name = KEYMAP_PRESET_NAMES[i];
       if (name === undefined) return;
@@ -366,7 +379,6 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
         "keymap preset",
       );
     },
-    customLabel: () => "custom",
   });
 
   // keys category: same subsection-divider mechanism as genericUiRows —
@@ -385,26 +397,6 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
     return rows;
   };
 
-  // master toggles that gate dependent rows (schema showWhen): flipping one
-  // must rebuild the panel so children appear/vanish live (afterAdjust only
-  // repaints the adjusted row's own value text without this)
-  const GATING_MASTERS = new Set([
-    "fileAnimation",
-    "fileHoverAnimation",
-    "sidebarAnimation",
-    "sidebarHoverAnimation",
-    "topbarAnimation",
-    "directoryBarAnimation",
-    "smoothScrolling",
-    "previewEnabled",
-    "sidebarAutoHide",
-    "previewAutoHide",
-    "terminalAutoHide",
-    "listingsCache",
-    "windowedGrid",
-    "scrimMode",
-  ]);
-
   // `extras` injects a hand-built row INTO the schema stream, keyed by the prop
   // it must sit after — the default-file-manager control reads as part of the
   // boot/network pair under launch time, not as a config-level action at the end.
@@ -416,10 +408,10 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
     // subsection dividers: one header row where the schema's subsection name
     // changes — including the first section, so every group with dividers is
     // uniformly labeled (groups without subsections render no headers at all).
-    // showWhen filters BEFORE header emission, so a fully hidden section
+    // the gate filters BEFORE header emission, so a fully hidden section
     // leaves no orphan header behind.
     let subsection = "";
-    const live = uiRowsIn(group).filter((row) => row.showWhen?.(ctx.config.ui) ?? true);
+    const live = uiRowsIn(group).filter((row) => (row.gate ? gateAllows(row.gate, ctx.config.ui) : true));
     for (const row of live) {
       if (SPECIAL_UI_PROPS.has(row.prop)) continue;
       if (row.subsection && row.subsection !== subsection) {
@@ -427,14 +419,17 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
         rows.push({ kind: "header", label: row.subsection });
       }
       const built = schemaRow(row);
-      // these change the PANEL's own colors (or its icons) — their adjust must re-render it
+      // these change the PANEL's own colors (or its icons) — their adjust must re-render it;
+      // GATED_MASTERS (derived from the schema's gates) are the rows whose flip
+      // makes a dependent appear/vanish, so their adjust must rebuild too
+      // (afterAdjust only repaints the adjusted row's own value text without it)
       if (
         row.prop === "uiStyle" ||
         row.prop === "transparentBg" ||
         row.prop === "icons" ||
         row.prop === "ttyMode" ||
         row.prop === "forceGlyph" ||
-        GATING_MASTERS.has(row.prop)
+        GATED_MASTERS.has(row.prop)
       ) {
         if (built.kind === "toggle" || built.kind === "cycle") built.repaint = true;
       }

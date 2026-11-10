@@ -43,7 +43,7 @@ import {
   type PluginPreview,
   type PluginStore,
 } from "./plugin-api";
-import { isValidSettingRow, type SettingRow } from "../config/config-schema";
+import { normalizeSettingRow, type SettingRow } from "../config/config-schema";
 
 // user plugin home: alongside config.toml (XDG_CONFIG_HOME aware so tests
 // can sandbox it — never hardcode ~/.config)
@@ -596,15 +596,21 @@ export const makePluginRegistry = (deps: {
       }
       const rawRows = result.rows ?? [];
       if (!Array.isArray(rawRows)) throw new Error(`rows must be an array`);
-      const rows = (rawRows as unknown[]).filter((r): r is SettingRow => {
-        if (isValidSettingRow(r)) return true;
+      // normalize: a legacy cycle row (getIdx + customLabel) is folded into
+      // the tagged selection, so the app has ONE row shape
+      const rows: SettingRow[] = [];
+      for (const r of rawRows as unknown[]) {
+        const row = normalizeSettingRow(r);
+        if (row) {
+          rows.push(row);
+          continue;
+        }
         try {
           api.log(
             `plugin ${m.name}: settings row ${JSON.stringify((r as { label?: unknown })?.label ?? "<unnamed>")} invalid — dropped`,
           );
         } catch {}
-        return false;
-      });
+      }
       return {
         name: mod.name,
         version: meta(m.version),

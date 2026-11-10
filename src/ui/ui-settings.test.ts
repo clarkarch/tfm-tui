@@ -41,7 +41,7 @@ const mkRows = (): SettingRow[] => {
       kind: "cycle",
       label: "theme",
       names: ["tokyo-night", "gruvbox"],
-      getIdx: () => cycle.i,
+      get: () => ({ kind: "index", index: cycle.i }),
       setIdx: (i) => (cycle.i = i),
     },
     {

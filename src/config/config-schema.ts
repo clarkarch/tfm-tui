@@ -47,12 +47,13 @@ export type SettingRow =
       repaint?: boolean;
       restart?: boolean;
       names: string[];
-      getIdx: () => number;
+      // the row's state is TAGGED: one of the names, or a value that matches
+      // none of them. The old shape encoded "custom" as the magic index -1
+      // PLUS a parallel customLabel callback — two descriptions of one state
+      // (a row could answer one and not the other, and the consumers had to
+      // know the convention).
+      get: () => CycleSelection;
       setIdx: (i: number) => void;
-      // shown when getIdx() is -1 (value matches no preset). Only the theme
-      // row goes custom today — a bare "custom" never says custom *what*,
-      // so the theme row reports "~<nearest preset>" instead.
-      customLabel?: () => string;
     }
   // key rows are enter/click-driven (capture flow in ui-settings), not adjustable.
   // set reports an outcome: the panel offers Enter-to-swap on conflict and
@@ -76,6 +77,11 @@ export type SettingRow =
 
 export type SettingGroup = { header?: string; icon?: string; rows: SettingRow[] };
 
+// a cycle row's state: one of its names, or a value that matches none of
+// them (with the label that names it — the theme row reports
+// "~<nearest preset>", never a bare "custom")
+export type CycleSelection = { kind: "index"; index: number } | { kind: "custom"; label: string };
+
 // outcome of a keybind capture commit (see the keybind row above)
 export type KeybindSetResult =
   | { status: "applied" }
@@ -86,6 +92,9 @@ export type KeybindSetResult =
 // commands validation): a malformed row like {kind:"toggle"} with no get/set
 // would otherwise crash the settings panel at render or throw out of the
 // keypress handler on adjust — invalid entries drop, the plugin stays.
+// A cycle row is accepted in EITHER shape: the current one (a tagged
+// selection) or the legacy one (getIdx + customLabel) — normalizeSettingRow
+// folds the legacy shape into the current one.
 export const isValidSettingRow = (r: unknown): boolean => {
   if (typeof r !== "object" || r === null) return false;
   const row = r as Record<string, unknown>;
@@ -103,12 +112,10 @@ export const isValidSettingRow = (r: unknown): boolean => {
         typeof row.set === "function"
       );
     case "cycle":
-      return (
-        Array.isArray(row.names) &&
-        row.names.every((s) => typeof s === "string") &&
-        typeof row.getIdx === "function" &&
-        typeof row.setIdx === "function"
-      );
+      if (!Array.isArray(row.names) || !row.names.every((s) => typeof s === "string")) return false;
+      if (typeof row.setIdx !== "function") return false;
+      if (typeof row.get === "function") return true; // current shape
+      return typeof row.getIdx === "function"; // legacy shape (normalized on load)
     case "keybind":
       return typeof row.get === "function" && typeof row.set === "function";
     case "action":
@@ -118,6 +125,25 @@ export const isValidSettingRow = (r: unknown): boolean => {
     default:
       return false;
   }
+};
+
+// the ONE row shape inside the app: a legacy plugin cycle row (getIdx +
+// customLabel) is folded into the tagged selection, so the panel and the
+// adjust path never see the magic index again. The legacy label stays LIVE
+// (it is a callback, not a snapshot).
+export const normalizeSettingRow = (raw: unknown): SettingRow | null => {
+  if (!isValidSettingRow(raw)) return null;
+  const row = raw as Record<string, unknown>;
+  if (row.kind !== "cycle" || typeof row.get === "function") return raw as SettingRow;
+  const getIdx = row.getIdx as () => number;
+  const customLabel = typeof row.customLabel === "function" ? (row.customLabel as () => string) : undefined;
+  return {
+    ...(raw as object),
+    get: () => {
+      const i = getIdx();
+      return i >= 0 ? { kind: "index", index: i } : { kind: "custom", label: customLabel?.() ?? "custom" };
+    },
+  } as SettingRow;
 };
 
 export type Theme = {
@@ -436,6 +462,31 @@ export type Config = { ui: UiConfig; theme: Theme; keys: KeysConfig };
 
 type GuiGroup = "appearance" | "layout" | "animations" | "optimization" | "behavior" | "files" | "advanced" | "keys";
 
+// --- progressive disclosure gate ---
+// A gated row names the props that gate it. The gate IS the policy: the
+// panel's rebuild set is derived from these terms (see GATED_MASTERS), so a
+// new gated row can never be missed by a hand-kept list — the old list
+// silently lost rows (the master flipped, the dependent never appeared, and
+// nothing said so).
+//   all: every term must hold   (the AND case)
+//   any: one term must hold      (the OR case)
+// A term without `eq` holds when the prop is truthy (a bool master); an
+// enum term MUST name the value it wants (a bare enum is always truthy).
+export type GateTerm = { prop: string; eq?: string | boolean };
+export type UiGate = { all: readonly GateTerm[] } | { any: readonly GateTerm[] };
+
+export const gateTerms = (gate: UiGate): readonly GateTerm[] => ("all" in gate ? gate.all : gate.any);
+
+export const gateAllows = (gate: UiGate, ui: UiConfig): boolean => {
+  const terms = gateTerms(gate);
+  if (terms.length === 0) return true;
+  const holds = (t: GateTerm): boolean => {
+    const v = (ui as unknown as Record<string, unknown>)[t.prop];
+    return t.eq === undefined ? !!v : v === t.eq;
+  };
+  return "all" in gate ? terms.every(holds) : terms.some(holds);
+};
+
 type RowCommon = {
   tomlKey: string;
   prop: string;
@@ -451,12 +502,16 @@ type RowCommon = {
   // these rows ("needs restart" footer + one toast on adjust) and the
   // serializer appends "(needs restart)" to their TOML doc comments.
   restart?: boolean;
-  // progressive disclosure: the row renders only while this holds (read live
-  // against the current ui config on every panel build). Same-section only,
-  // except reveal-delay's windowed-grid gate (documented allowlist) — a
-  // hidden row must always be one glance from its master toggle, never in
-  // another category. Masters themselves are always visible.
-  showWhen?: (ui: UiConfig) => boolean;
+  // progressive disclosure: the row renders only while this gate holds (read
+  // live against the current ui config on every panel build). The gate is
+  // DECLARATIVE — it names the props that gate it, so the panel's rebuild
+  // set is derived from the schema instead of a hand-kept list (a list that
+  // misses a row loses the dependent forever: the master flips, the row
+  // never appears, no error anywhere). Same-section only, except
+  // reveal-delay's windowed-grid gate (documented allowlist) — a hidden row
+  // must always be one glance from its master toggle, never in another
+  // category. Masters themselves are always visible.
+  gate?: UiGate;
 };
 
 type SchemaRow =
@@ -671,7 +726,7 @@ const UI_ROWS: SchemaRow[] = [
     blurb: "How the sidebar hides itself",
     group: "layout",
     subsection: "sidebar",
-    showWhen: (ui) => ui.sidebarAutoHide,
+    gate: { all: [{ prop: "sidebarAutoHide" }] },
   },
   {
     kind: "bool",
@@ -700,7 +755,7 @@ const UI_ROWS: SchemaRow[] = [
     blurb: "How wide the preview pane is",
     group: "layout",
     subsection: "preview",
-    showWhen: (ui) => ui.previewEnabled,
+    gate: { all: [{ prop: "previewEnabled" }] },
   },
   {
     kind: "bool",
@@ -713,7 +768,7 @@ const UI_ROWS: SchemaRow[] = [
     blurb: "Hide the preview until the mouse nears it",
     group: "layout",
     subsection: "preview",
-    showWhen: (ui) => ui.previewEnabled,
+    gate: { all: [{ prop: "previewEnabled" }] },
   },
   {
     kind: "enum",
@@ -727,7 +782,7 @@ const UI_ROWS: SchemaRow[] = [
     blurb: "How the preview hides itself",
     group: "layout",
     subsection: "preview",
-    showWhen: (ui) => ui.previewEnabled && ui.previewAutoHide,
+    gate: { all: [{ prop: "previewEnabled" }, { prop: "previewAutoHide" }] },
   },
   {
     kind: "int",
@@ -769,7 +824,7 @@ const UI_ROWS: SchemaRow[] = [
     blurb: "How the terminal hides itself",
     group: "layout",
     subsection: "terminal",
-    showWhen: (ui) => ui.terminalAutoHide,
+    gate: { all: [{ prop: "terminalAutoHide" }] },
   },
   {
     kind: "bool",
@@ -862,7 +917,7 @@ const UI_ROWS: SchemaRow[] = [
     blurb: "How close the mouse gets before panels pop out",
     group: "layout",
     subsection: "hover timing",
-    showWhen: (ui) => ui.sidebarAutoHide || ui.previewAutoHide || ui.terminalAutoHide,
+    gate: { any: [{ prop: "sidebarAutoHide" }, { prop: "previewAutoHide" }, { prop: "terminalAutoHide" }] },
   },
   {
     kind: "int",
@@ -879,7 +934,7 @@ const UI_ROWS: SchemaRow[] = [
     blurb: "Wait before hidden panels slide out",
     group: "layout",
     subsection: "hover timing",
-    showWhen: (ui) => ui.sidebarAutoHide || ui.previewAutoHide || ui.terminalAutoHide,
+    gate: { any: [{ prop: "sidebarAutoHide" }, { prop: "previewAutoHide" }, { prop: "terminalAutoHide" }] },
   },
   {
     kind: "int",
@@ -896,7 +951,7 @@ const UI_ROWS: SchemaRow[] = [
     blurb: "Wait before panels hide again",
     group: "layout",
     subsection: "hover timing",
-    showWhen: (ui) => ui.sidebarAutoHide || ui.previewAutoHide || ui.terminalAutoHide,
+    gate: { any: [{ prop: "sidebarAutoHide" }, { prop: "previewAutoHide" }, { prop: "terminalAutoHide" }] },
   },
   {
     kind: "int",
@@ -913,7 +968,7 @@ const UI_ROWS: SchemaRow[] = [
     blurb: "How fast panels slide in and out",
     group: "layout",
     subsection: "hover timing",
-    showWhen: (ui) => ui.sidebarAutoHide || ui.previewAutoHide || ui.terminalAutoHide,
+    gate: { any: [{ prop: "sidebarAutoHide" }, { prop: "previewAutoHide" }, { prop: "terminalAutoHide" }] },
   },
   {
     kind: "bool",
@@ -1067,7 +1122,7 @@ const UI_ROWS: SchemaRow[] = [
     blurb: "How dark the backdrop gets behind a modal",
     group: "appearance",
     subsection: "look",
-    showWhen: (ui) => ui.scrimMode === "dim",
+    gate: { all: [{ prop: "scrimMode", eq: "dim" }] },
   },
   {
     kind: "enum",
@@ -1118,7 +1173,7 @@ const UI_ROWS: SchemaRow[] = [
     blurb: "How files arrive",
     group: "animations",
     subsection: "files",
-    showWhen: (ui) => ui.fileAnimation,
+    gate: { all: [{ prop: "fileAnimation" }] },
   },
   {
     kind: "int",
@@ -1135,7 +1190,7 @@ const UI_ROWS: SchemaRow[] = [
     blurb: "How long file animations play",
     group: "animations",
     subsection: "files",
-    showWhen: (ui) => ui.fileAnimation,
+    gate: { all: [{ prop: "fileAnimation" }] },
   },
   {
     kind: "int",
@@ -1152,7 +1207,7 @@ const UI_ROWS: SchemaRow[] = [
     blurb: "How far files glide in from",
     group: "animations",
     subsection: "files",
-    showWhen: (ui) => ui.fileAnimation,
+    gate: { all: [{ prop: "fileAnimation" }] },
   },
   {
     kind: "enum",
@@ -1166,7 +1221,7 @@ const UI_ROWS: SchemaRow[] = [
     blurb: "Which way files glide in from",
     group: "animations",
     subsection: "files",
-    showWhen: (ui) => ui.fileAnimation,
+    gate: { all: [{ prop: "fileAnimation" }] },
   },
   {
     kind: "int",
@@ -1183,7 +1238,7 @@ const UI_ROWS: SchemaRow[] = [
     blurb: "How spread out the cascade is",
     group: "animations",
     subsection: "files",
-    showWhen: (ui) => ui.fileAnimation,
+    gate: { all: [{ prop: "fileAnimation" }] },
   },
   {
     kind: "enum",
@@ -1197,7 +1252,7 @@ const UI_ROWS: SchemaRow[] = [
     blurb: "How the animation speeds up and settles",
     group: "animations",
     subsection: "files",
-    showWhen: (ui) => ui.fileAnimation,
+    gate: { all: [{ prop: "fileAnimation" }] },
   },
   {
     kind: "bool",
@@ -1250,7 +1305,7 @@ const UI_ROWS: SchemaRow[] = [
     blurb: "Remember file sizes too, for faster sorting",
     group: "optimization",
     subsection: "caching",
-    showWhen: (ui) => ui.listingsCache,
+    gate: { all: [{ prop: "listingsCache" }] },
   },
   {
     kind: "int",
@@ -1267,7 +1322,7 @@ const UI_ROWS: SchemaRow[] = [
     blurb: "How long cached folder info is trusted",
     group: "optimization",
     subsection: "caching",
-    showWhen: (ui) => ui.listingsCache,
+    gate: { all: [{ prop: "listingsCache" }] },
   },
   {
     kind: "bool",
@@ -1309,7 +1364,7 @@ const UI_ROWS: SchemaRow[] = [
     blurb: "How long the hover animation lasts",
     group: "animations",
     subsection: "file hover",
-    showWhen: (ui) => ui.fileHoverAnimation,
+    gate: { all: [{ prop: "fileHoverAnimation" }] },
   },
   {
     kind: "int",
@@ -1326,7 +1381,7 @@ const UI_ROWS: SchemaRow[] = [
     blurb: "How far icons move on hover",
     group: "animations",
     subsection: "file hover",
-    showWhen: (ui) => ui.fileHoverAnimation,
+    gate: { all: [{ prop: "fileHoverAnimation" }] },
   },
   {
     kind: "enum",
@@ -1340,7 +1395,7 @@ const UI_ROWS: SchemaRow[] = [
     blurb: "Which way icons move on hover",
     group: "animations",
     subsection: "file hover",
-    showWhen: (ui) => ui.fileHoverAnimation,
+    gate: { all: [{ prop: "fileHoverAnimation" }] },
   },
   {
     kind: "enum",
@@ -1354,7 +1409,7 @@ const UI_ROWS: SchemaRow[] = [
     blurb: "How the hover animation settles",
     group: "animations",
     subsection: "file hover",
-    showWhen: (ui) => ui.fileHoverAnimation,
+    gate: { all: [{ prop: "fileHoverAnimation" }] },
   },
   {
     kind: "bool",
@@ -1367,7 +1422,7 @@ const UI_ROWS: SchemaRow[] = [
     blurb: "File names move along on hover",
     group: "animations",
     subsection: "file hover",
-    showWhen: (ui) => ui.fileHoverAnimation,
+    gate: { all: [{ prop: "fileHoverAnimation" }] },
   },
   {
     kind: "bool",
@@ -1395,7 +1450,7 @@ const UI_ROWS: SchemaRow[] = [
     group: "animations",
     subsection: "sidebar intro",
     restart: true,
-    showWhen: (ui) => ui.sidebarAnimation,
+    gate: { all: [{ prop: "sidebarAnimation" }] },
   },
   {
     kind: "int",
@@ -1413,7 +1468,7 @@ const UI_ROWS: SchemaRow[] = [
     group: "animations",
     subsection: "sidebar intro",
     restart: true,
-    showWhen: (ui) => ui.sidebarAnimation,
+    gate: { all: [{ prop: "sidebarAnimation" }] },
   },
   {
     kind: "int",
@@ -1431,7 +1486,7 @@ const UI_ROWS: SchemaRow[] = [
     group: "animations",
     subsection: "sidebar intro",
     restart: true,
-    showWhen: (ui) => ui.sidebarAnimation,
+    gate: { all: [{ prop: "sidebarAnimation" }] },
   },
   {
     kind: "enum",
@@ -1446,7 +1501,7 @@ const UI_ROWS: SchemaRow[] = [
     group: "animations",
     subsection: "sidebar intro",
     restart: true,
-    showWhen: (ui) => ui.sidebarAnimation,
+    gate: { all: [{ prop: "sidebarAnimation" }] },
   },
   {
     kind: "int",
@@ -1464,7 +1519,7 @@ const UI_ROWS: SchemaRow[] = [
     group: "animations",
     subsection: "sidebar intro",
     restart: true,
-    showWhen: (ui) => ui.sidebarAnimation,
+    gate: { all: [{ prop: "sidebarAnimation" }] },
   },
   {
     kind: "enum",
@@ -1479,7 +1534,7 @@ const UI_ROWS: SchemaRow[] = [
     group: "animations",
     subsection: "sidebar intro",
     restart: true,
-    showWhen: (ui) => ui.sidebarAnimation,
+    gate: { all: [{ prop: "sidebarAnimation" }] },
   },
   {
     kind: "bool",
@@ -1493,7 +1548,7 @@ const UI_ROWS: SchemaRow[] = [
     group: "animations",
     subsection: "sidebar intro",
     restart: true,
-    showWhen: (ui) => ui.sidebarAnimation,
+    gate: { all: [{ prop: "sidebarAnimation" }] },
   },
   {
     kind: "bool",
@@ -1522,7 +1577,7 @@ const UI_ROWS: SchemaRow[] = [
     blurb: "How long the hover animation lasts",
     group: "animations",
     subsection: "sidebar hover",
-    showWhen: (ui) => ui.sidebarHoverAnimation,
+    gate: { all: [{ prop: "sidebarHoverAnimation" }] },
   },
   {
     kind: "int",
@@ -1539,7 +1594,7 @@ const UI_ROWS: SchemaRow[] = [
     blurb: "How far row icons move on hover",
     group: "animations",
     subsection: "sidebar hover",
-    showWhen: (ui) => ui.sidebarHoverAnimation,
+    gate: { all: [{ prop: "sidebarHoverAnimation" }] },
   },
   {
     kind: "enum",
@@ -1553,7 +1608,7 @@ const UI_ROWS: SchemaRow[] = [
     blurb: "Which way row icons move on hover",
     group: "animations",
     subsection: "sidebar hover",
-    showWhen: (ui) => ui.sidebarHoverAnimation,
+    gate: { all: [{ prop: "sidebarHoverAnimation" }] },
   },
   {
     kind: "enum",
@@ -1567,7 +1622,7 @@ const UI_ROWS: SchemaRow[] = [
     blurb: "How the hover animation settles",
     group: "animations",
     subsection: "sidebar hover",
-    showWhen: (ui) => ui.sidebarHoverAnimation,
+    gate: { all: [{ prop: "sidebarHoverAnimation" }] },
   },
   {
     kind: "bool",
@@ -1580,7 +1635,7 @@ const UI_ROWS: SchemaRow[] = [
     blurb: "Row labels move along on hover",
     group: "animations",
     subsection: "sidebar hover",
-    showWhen: (ui) => ui.sidebarHoverAnimation,
+    gate: { all: [{ prop: "sidebarHoverAnimation" }] },
   },
   {
     kind: "bool",
@@ -1608,7 +1663,7 @@ const UI_ROWS: SchemaRow[] = [
     group: "animations",
     subsection: "top bar",
     restart: true,
-    showWhen: (ui) => ui.topbarAnimation,
+    gate: { all: [{ prop: "topbarAnimation" }] },
   },
   {
     kind: "int",
@@ -1626,7 +1681,7 @@ const UI_ROWS: SchemaRow[] = [
     group: "animations",
     subsection: "top bar",
     restart: true,
-    showWhen: (ui) => ui.topbarAnimation,
+    gate: { all: [{ prop: "topbarAnimation" }] },
   },
   {
     kind: "int",
@@ -1644,7 +1699,7 @@ const UI_ROWS: SchemaRow[] = [
     group: "animations",
     subsection: "top bar",
     restart: true,
-    showWhen: (ui) => ui.topbarAnimation,
+    gate: { all: [{ prop: "topbarAnimation" }] },
   },
   {
     kind: "enum",
@@ -1659,7 +1714,7 @@ const UI_ROWS: SchemaRow[] = [
     group: "animations",
     subsection: "top bar",
     restart: true,
-    showWhen: (ui) => ui.topbarAnimation,
+    gate: { all: [{ prop: "topbarAnimation" }] },
   },
   {
     kind: "int",
@@ -1677,7 +1732,7 @@ const UI_ROWS: SchemaRow[] = [
     group: "animations",
     subsection: "top bar",
     restart: true,
-    showWhen: (ui) => ui.topbarAnimation,
+    gate: { all: [{ prop: "topbarAnimation" }] },
   },
   {
     kind: "enum",
@@ -1692,7 +1747,7 @@ const UI_ROWS: SchemaRow[] = [
     group: "animations",
     subsection: "top bar",
     restart: true,
-    showWhen: (ui) => ui.topbarAnimation,
+    gate: { all: [{ prop: "topbarAnimation" }] },
   },
   {
     kind: "bool",
@@ -1718,7 +1773,7 @@ const UI_ROWS: SchemaRow[] = [
     blurb: "How folder crumbs arrive",
     group: "animations",
     subsection: "directory bar",
-    showWhen: (ui) => ui.directoryBarAnimation,
+    gate: { all: [{ prop: "directoryBarAnimation" }] },
   },
   {
     kind: "int",
@@ -1735,7 +1790,7 @@ const UI_ROWS: SchemaRow[] = [
     blurb: "How long the crumb animation plays",
     group: "animations",
     subsection: "directory bar",
-    showWhen: (ui) => ui.directoryBarAnimation,
+    gate: { all: [{ prop: "directoryBarAnimation" }] },
   },
   {
     kind: "int",
@@ -1752,7 +1807,7 @@ const UI_ROWS: SchemaRow[] = [
     blurb: "How far crumbs slide in from",
     group: "animations",
     subsection: "directory bar",
-    showWhen: (ui) => ui.directoryBarAnimation,
+    gate: { all: [{ prop: "directoryBarAnimation" }] },
   },
   {
     kind: "enum",
@@ -1766,7 +1821,7 @@ const UI_ROWS: SchemaRow[] = [
     blurb: "Which way crumbs slide in from",
     group: "animations",
     subsection: "directory bar",
-    showWhen: (ui) => ui.directoryBarAnimation,
+    gate: { all: [{ prop: "directoryBarAnimation" }] },
   },
   {
     kind: "int",
@@ -1783,7 +1838,7 @@ const UI_ROWS: SchemaRow[] = [
     blurb: "How spread out the crumb cascade is",
     group: "animations",
     subsection: "directory bar",
-    showWhen: (ui) => ui.directoryBarAnimation,
+    gate: { all: [{ prop: "directoryBarAnimation" }] },
   },
   {
     kind: "enum",
@@ -1797,7 +1852,7 @@ const UI_ROWS: SchemaRow[] = [
     blurb: "How the crumb animation speeds and settles",
     group: "animations",
     subsection: "directory bar",
-    showWhen: (ui) => ui.directoryBarAnimation,
+    gate: { all: [{ prop: "directoryBarAnimation" }] },
   },
   {
     kind: "bool",
@@ -1826,7 +1881,7 @@ const UI_ROWS: SchemaRow[] = [
     blurb: "How long a scroll glide lasts",
     group: "animations",
     subsection: "scrolling",
-    showWhen: (ui) => ui.smoothScrolling,
+    gate: { all: [{ prop: "smoothScrolling" }] },
   },
   {
     kind: "bool",
@@ -1839,7 +1894,7 @@ const UI_ROWS: SchemaRow[] = [
     blurb: "Smoother animation on big folders",
     group: "optimization",
     subsection: "performance",
-    showWhen: (ui) => ui.fileAnimation,
+    gate: { all: [{ prop: "fileAnimation" }] },
   },
   {
     kind: "bool",
@@ -1852,7 +1907,7 @@ const UI_ROWS: SchemaRow[] = [
     blurb: "Only animate files you can see",
     group: "optimization",
     subsection: "performance",
-    showWhen: (ui) => ui.fileAnimation,
+    gate: { all: [{ prop: "fileAnimation" }] },
   },
   {
     kind: "bool",
@@ -1865,7 +1920,7 @@ const UI_ROWS: SchemaRow[] = [
     blurb: "Animate rows instead of single files",
     group: "optimization",
     subsection: "performance",
-    showWhen: (ui) => ui.fileAnimation,
+    gate: { all: [{ prop: "fileAnimation" }] },
   },
   {
     kind: "int",
@@ -1882,7 +1937,7 @@ const UI_ROWS: SchemaRow[] = [
     blurb: "Skip animation in huge folders",
     group: "optimization",
     subsection: "performance",
-    showWhen: (ui) => ui.fileAnimation,
+    gate: { all: [{ prop: "fileAnimation" }] },
   },
   {
     kind: "int",
@@ -1904,7 +1959,7 @@ const UI_ROWS: SchemaRow[] = [
     // toggle (same optimization category as this row) — a visible-but-inert
     // delay while the global animation master is off tells a coherent story
     // ("nothing animates"), while a knob hidden behind two masters is not
-    showWhen: (ui) => ui.windowedGrid,
+    gate: { all: [{ prop: "windowedGrid" }] },
   },
   {
     kind: "int",
@@ -2155,6 +2210,13 @@ export const SCHEMA: SchemaRow[] = [...UI_ROWS, ...THEME_ROWS, ...KEY_ROWS];
 
 export const UI_SCHEMA = UI_ROWS;
 export const KEY_SCHEMA = KEY_ROWS;
+
+// the props whose ADJUSTMENT can make a gated row appear or disappear —
+// derived from the schema's own gates, so a new gated row joins the set by
+// construction (the panel's rebuild set used to be a hand-kept list).
+export const GATED_MASTERS: ReadonlySet<string> = new Set(
+  UI_ROWS.flatMap((r) => (r.gate ? gateTerms(r.gate).map((t) => t.prop) : [])),
+);
 
 export const defaultConfig: Config = {
   ui: Object.fromEntries(UI_ROWS.map((r) => [r.prop, r.def])),

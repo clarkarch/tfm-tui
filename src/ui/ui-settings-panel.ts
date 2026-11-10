@@ -553,8 +553,8 @@ const renderRowPane = (
           rowSpec.kind === "stepper"
             ? rowSpec.fmt(rowSpec.get())
             : (() => {
-                const i = rowSpec.getIdx();
-                return i >= 0 ? (rowSpec.names[i] ?? "?") : (rowSpec.customLabel?.() ?? "custom");
+                const sel = rowSpec.get();
+                return sel.kind === "index" ? (rowSpec.names[sel.index] ?? "?") : sel.label;
               })();
       } catch {} // a throwing plugin row renders as empty, never bricks the panel
       control = Box(

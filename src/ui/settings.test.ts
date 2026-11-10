@@ -74,7 +74,7 @@ describe("applyAdjust", () => {
       kind: "cycle",
       label: "c",
       names: ["a", "b", "c"],
-      getIdx: () => idx,
+      get: () => ({ kind: "index", index: idx }),
       setIdx: (i) => {
         idx = i;
       },
@@ -89,14 +89,15 @@ describe("applyAdjust", () => {
     expect(idx).toBe(2); // wraps backward
   });
 
-  test("cycle with getIdx() < 0 (custom value) picks an end based on direction", () => {
-    const idx = -1;
+  test("a custom cycle selection picks an end based on direction", () => {
+    // the selection is TAGGED — a value that matches no name is not "index
+    // -1", it is its own state with its own label
     let set = -9;
     const row: SettingRow = {
       kind: "cycle",
       label: "c",
       names: ["a", "b"],
-      getIdx: () => idx,
+      get: () => ({ kind: "custom", label: "~custom" }),
       setIdx: (i) => {
         set = i;
       },
@@ -105,7 +106,24 @@ describe("applyAdjust", () => {
     expect(set).toBe(0);
     applyAdjust(row, -1);
     expect(set).toBe(1);
-    expect(idx).toBe(-1); // setIdx owns the state; getIdx untouched
+  });
+
+  test("a cycle row with no names cannot be adjusted", () => {
+    // an empty name list has no end to pick — the old path computed n - 1 = -1
+    // and handed setIdx(-1), which indexes names[-1] (undefined)
+    let called = 0;
+    const row: SettingRow = {
+      kind: "cycle",
+      label: "c",
+      names: [],
+      get: () => ({ kind: "custom", label: "custom" }),
+      setIdx: () => {
+        called++;
+      },
+    };
+    expect(applyAdjust(row, 1)).toBe(false);
+    expect(applyAdjust(row, -1)).toBe(false);
+    expect(called).toBe(0);
   });
 
   test("action rows never adjust", () => {

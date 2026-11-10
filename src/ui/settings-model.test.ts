@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { makeSettingModel, type SettingsModelCtx } from "./settings-model";
-import { defaultConfig, KEY_SCHEMA, UI_SCHEMA, type Config } from "../config/config-schema";
+import { defaultConfig, GATED_MASTERS, KEY_SCHEMA, UI_SCHEMA, type Config } from "../config/config-schema";
 import { THEME_PRESETS } from "../config/themes";
 import { makePluginStore } from "../plugins/plugins";
 import type { LoadedPlugin } from "../plugins/plugin-api";
@@ -69,23 +69,16 @@ const mkPlugin = (over: Partial<LoadedPlugin> & { name: string }): LoadedPlugin 
 
 type MkHarness = ReturnType<typeof mk>;
 
-// every gating master from the model: turning them all on surfaces the full
-// inventory, turning one off hides exactly its dependents and nothing else
-const MASTERS_ON: Record<string, boolean> = {
-  fileAnimation: true,
-  fileHoverAnimation: true,
-  sidebarAnimation: true,
-  sidebarHoverAnimation: true,
-  topbarAnimation: true,
-  directoryBarAnimation: true,
-  smoothScrolling: true,
-  previewEnabled: true,
-  sidebarAutoHide: true,
-  previewAutoHide: true,
-  terminalAutoHide: true,
-  listingsCache: true,
-  windowedGrid: true,
-};
+// every gating master from the SCHEMA: turning them all on surfaces the full
+// inventory, turning one off hides exactly its dependents and nothing else.
+// The list is DERIVED (the model's rebuild set comes from the same gates) —
+// a hand-kept copy here was a third place to forget a master.
+const MASTERS_ON: Record<string, boolean> = Object.fromEntries(
+  UI_SCHEMA.filter((r) => r.section === "ui" && r.kind === "bool" && GATED_MASTERS.has(r.prop)).map((r) => [
+    r.prop,
+    true,
+  ]),
+);
 
 const withMasters = (h: MkHarness, on: boolean): void => {
   for (const [prop, v] of Object.entries(MASTERS_ON)) {
@@ -466,7 +459,7 @@ describe("settingGroups shape", () => {
     const row = h.byLabel("keymap preset");
     if (row.kind !== "cycle") throw new Error("keymap preset must be a cycle");
     expect(row.names).toEqual(["tfm", "yazi"]);
-    expect(row.getIdx()).toBe(0);
+    expect(row.get()).toEqual({ kind: "index", index: 0 });
     row.setIdx(1);
     expect(h.config.keys.moveDown).toEqual(["down", "j"]);
     expect(h.config.keys.copy).toEqual(["y"]);
@@ -494,8 +487,7 @@ describe("settingGroups shape", () => {
     h.config.keys.quit = ["ctrl+q", "q"];
     const row = h.byLabel("keymap preset");
     if (row.kind !== "cycle") throw new Error("keymap preset must be a cycle");
-    expect(row.getIdx()).toBe(-1);
-    expect(row.customLabel?.()).toBe("custom");
+    expect(row.get()).toEqual({ kind: "custom", label: "custom" });
   });
 
   test("terminal height stepper commits through the ui patch", () => {
@@ -828,7 +820,7 @@ describe("generic schema rows", () => {
     // title block then repaints there (see ui-retheme's applyConfig paint)
     const h = mk();
     const row = asCycle(h.byLabel("sidebar title"));
-    expect(row.getIdx()).toBe(0); // tfm (default)
+    expect(row.get()).toEqual({ kind: "index", index: 0 }); // tfm (default)
     row.setIdx(1); // files
     expect(h.applied[0]!.ui.sidebarTitle).toBe("files");
     expect(h.config.ui.sidebarTitle).toBe("files");
@@ -963,11 +955,11 @@ describe("hand-written rows", () => {
     expect(asCycle(row).names[0]).toBe("System");
     expect(asCycle(row).names[1]).toBe(THEME_PRESETS[0]!.name);
     // default config is Tokyo Night at preset 0 → cycle index 1
-    expect(asCycle(row).getIdx()).toBe(1);
+    expect(asCycle(row).get()).toEqual({ kind: "index", index: 1 });
     asCycle(row).setIdx(0);
     expect(h.config.ui.followTerminal).toBe(true);
     expect(resolved).toBe(1);
-    expect(asCycle(h.byLabel("theme")).getIdx()).toBe(0);
+    expect(asCycle(h.byLabel("theme")).get()).toEqual({ kind: "index", index: 0 });
     // picking a preset leaves System mode
     asCycle(h.byLabel("theme")).setIdx(1);
     expect(h.config.ui.followTerminal).toBe(false);
@@ -998,21 +990,19 @@ describe("hand-written rows", () => {
   test("hand-edited theme reports ~nearest preset, exact match reports none needed", () => {
     const h = mk();
     const row = h.byLabel("theme");
-    if (row.kind !== "cycle" || !row.customLabel) throw new Error("theme row must be a cycle with customLabel");
+    if (row.kind !== "cycle") throw new Error("theme row must be a cycle");
     // default config IS Tokyo Night (preset 0) — behind the System entry at 1
-    expect(row.getIdx()).toBe(1);
+    expect(row.get()).toEqual({ kind: "index", index: 1 });
     h.config.theme = { ...THEME_PRESETS[2]!.theme, bg: "#000000" };
-    expect(row.getIdx()).toBe(-1);
-    expect(row.customLabel()).toBe(`~${THEME_PRESETS[2]!.name}`);
+    expect(row.get()).toEqual({ kind: "custom", label: `~${THEME_PRESETS[2]!.name}` });
   });
 
   test("console mode: theme row is display-only (adjust warns, commits nothing)", () => {
     const h = mk();
     (h.ctx as SettingsModelCtx).isTtyMode = () => true;
     const row = h.byLabel("theme");
-    if (row.kind !== "cycle" || !row.customLabel) throw new Error("theme row must be a cycle with customLabel");
-    expect(row.getIdx()).toBe(-1);
-    expect(row.customLabel()).toBe("Console"); // dark default config
+    if (row.kind !== "cycle") throw new Error("theme row must be a cycle");
+    expect(row.get()).toEqual({ kind: "custom", label: "Console" }); // dark default config
     const before = structuredClone(h.config.theme);
     asCycle(row).setIdx(2);
     expect(h.config.theme).toEqual(before); // no commit
@@ -1020,7 +1010,7 @@ describe("hand-written rows", () => {
     expect(h.warns).toHaveLength(1);
     expect(h.warns[0]!.title).toBe("theme");
     h.config.theme = { ...h.config.theme, bg: "#e1e2e7" };
-    expect(row.customLabel()).toBe("Console Light");
+    expect(row.get()).toEqual({ kind: "custom", label: "Console Light" });
   });
 
   test("default file manager row is an action that always spawns the confirm", async () => {
@@ -1271,6 +1261,74 @@ describe("plugin manifest header", () => {
     const headers = h.model.pluginGroups().map((g) => g.header);
     expect(headers).toContain("meta · 1.2.3 · someone · does things");
     expect(headers).toContain("plain");
+  });
+});
+
+describe("schema gating policy (D3.14)", () => {
+  // The schema declares, per row, WHICH props gate it. The panel's rebuild
+  // set is DERIVED from that declaration — a hand-maintained list silently
+  // loses a new gated row (the master flips, the dependent never appears,
+  // no error anywhere).
+  type GateTerm = { prop: string; eq?: string | boolean };
+  type UiGate = { all: readonly GateTerm[] } | { any: readonly GateTerm[] };
+  type GatedSchemaRow = { prop: string; label: string; gate?: UiGate };
+  const gatedRows = (): GatedSchemaRow[] =>
+    UI_SCHEMA.filter((r) => r.section === "ui").map((r) => r as unknown as GatedSchemaRow);
+  const gateTerms = (gate: UiGate): readonly GateTerm[] => ("all" in gate ? gate.all : gate.any);
+
+  test("the rebuild set is derived from the schema's gates (no hand-maintained list)", () => {
+    // the master set IS the union of every gate's terms — a new gated row can
+    // never be missed by a hand-kept list (the old one silently lost rows:
+    // the master flipped, the dependent never appeared)
+    expect([...(GATED_MASTERS ?? [])].sort()).toEqual([
+      "directoryBarAnimation",
+      "fileAnimation",
+      "fileHoverAnimation",
+      "listingsCache",
+      "previewAutoHide",
+      "previewEnabled",
+      "scrimMode",
+      "sidebarAnimation",
+      "sidebarAutoHide",
+      "sidebarHoverAnimation",
+      "smoothScrolling",
+      "terminalAutoHide",
+      "topbarAnimation",
+      "windowedGrid",
+    ]);
+  });
+
+  test("every schema row with a gate is reachable through its master", () => {
+    for (const row of gatedRows()) {
+      if (!row.gate) continue;
+      const terms = gateTerms(row.gate);
+      expect(terms.length, `${row.prop} must name its masters`).toBeGreaterThan(0);
+      for (const t of terms) {
+        const master = UI_SCHEMA.find((r) => r.section === "ui" && r.prop === t.prop);
+        expect(master, `${row.prop} gates on unknown prop ${t.prop}`).toBeDefined();
+        // only a toggle/cycle row can rebuild the panel — a stepper's adjust
+        // never re-renders, so an int master could never reveal its row
+        expect(["bool", "enum"], `${row.prop} gates on ${t.prop} (${master?.kind})`).toContain(master?.kind as string);
+        if (master?.kind === "enum") {
+          expect(t.eq, `${row.prop} gates on enum ${t.prop} without naming a value`).toBeDefined();
+        }
+      }
+    }
+  });
+
+  test("every gate's master rebuilds the panel (the dependent can appear live)", () => {
+    const h = mk();
+    withMasters(h, true);
+    for (const row of gatedRows()) {
+      if (!row.gate) continue;
+      for (const t of gateTerms(row.gate)) {
+        const master = UI_SCHEMA.find((r) => r.section === "ui" && r.prop === t.prop);
+        if (!master) continue;
+        const guiRow = h.rows().find((r) => r.label === master.label);
+        expect(guiRow, `${t.prop} has no GUI row`).toBeDefined();
+        expect("repaint" in guiRow! && guiRow!.repaint, `${t.prop} must rebuild the panel`).toBe(true);
+      }
+    }
   });
 });
 

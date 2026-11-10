@@ -28,7 +28,13 @@ export const applyAdjust = (row: SettingRow, dir: number): boolean => {
     }
     case "cycle": {
       const n = row.names.length;
-      const cur = row.getIdx();
+      // an empty name list has no end to pick — the old path computed
+      // n - 1 = -1 and handed setIdx(-1), which indexes names[-1]
+      if (n === 0) return false;
+      const sel = row.get();
+      // a custom value (one that matches no name) starts from an end: forward
+      // lands on the first name, backward on the last
+      const cur = sel.kind === "index" ? sel.index : -1;
       const next = cur < 0 ? (dir > 0 ? 0 : n - 1) : (cur + dir + n) % n;
       row.setIdx(next);
       return true;

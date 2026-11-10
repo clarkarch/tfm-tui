@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  GATED_MASTERS,
   KEY_SCHEMA,
   SCHEMA,
   UI_SCHEMA,
@@ -7,7 +8,9 @@ import {
   describeKeybindConflicts,
   exampleToml,
   findKeybindConflicts,
+  gateAllows,
   keybindConflict,
+  normalizeSettingRow,
   parseConfigDoc,
   serializeConfig,
   swapKeybind,
@@ -378,6 +381,107 @@ describe("schema invariants", () => {
         }
       }
     }
+  });
+});
+
+describe("progressive-disclosure gate", () => {
+  test("the rebuild set is the union of every gate's terms", () => {
+    // derived, never hand-kept: a gated row that missed the old list lost
+    // its dependent forever (the master flipped, the row never appeared)
+    const derived = new Set<string>();
+    for (const row of UI_SCHEMA) {
+      if (row.section !== "ui" || !row.gate) continue;
+      const terms = "all" in row.gate ? row.gate.all : row.gate.any;
+      for (const t of terms) derived.add(t.prop);
+    }
+    expect([...derived].sort()).toEqual([...GATED_MASTERS].sort());
+    expect(derived.size).toBeGreaterThan(0);
+  });
+
+  test("a gate holds only while its terms hold (all / any / a named value)", () => {
+    const ui = { ...defaultConfig.ui };
+    expect(gateAllows({ all: [{ prop: "fileAnimation" }] }, ui)).toBe(false);
+    expect(gateAllows({ all: [{ prop: "fileAnimation" }] }, { ...ui, fileAnimation: true })).toBe(true);
+    expect(
+      gateAllows(
+        { all: [{ prop: "previewEnabled" }, { prop: "previewAutoHide" }] },
+        {
+          ...ui,
+          previewEnabled: true,
+        },
+      ),
+    ).toBe(false);
+    expect(
+      gateAllows(
+        { all: [{ prop: "previewEnabled" }, { prop: "previewAutoHide" }] },
+        {
+          ...ui,
+          previewEnabled: true,
+          previewAutoHide: true,
+        },
+      ),
+    ).toBe(true);
+    expect(
+      gateAllows(
+        { any: [{ prop: "sidebarAutoHide" }, { prop: "terminalAutoHide" }] },
+        {
+          ...ui,
+          terminalAutoHide: true,
+        },
+      ),
+    ).toBe(true);
+    expect(gateAllows({ all: [{ prop: "scrimMode", eq: "dim" }] }, { ...ui, scrimMode: "fill" })).toBe(false);
+    expect(gateAllows({ all: [{ prop: "scrimMode", eq: "dim" }] }, { ...ui, scrimMode: "dim" })).toBe(true);
+  });
+});
+
+describe("plugin settings rows", () => {
+  test("a legacy cycle row (getIdx + customLabel) is normalized into the tagged selection", () => {
+    let label = "~nearest";
+    const legacy = {
+      kind: "cycle",
+      label: "legacy",
+      names: ["a", "b"],
+      getIdx: () => -1,
+      customLabel: () => label,
+      setIdx: () => {},
+    };
+    const row = normalizeSettingRow(legacy);
+    if (row?.kind !== "cycle") throw new Error("expected a cycle row");
+    expect(row.get()).toEqual({ kind: "custom", label: "~nearest" });
+    // the label stays LIVE (a callback, not a snapshot)
+    label = "~other";
+    expect(row.get()).toEqual({ kind: "custom", label: "~other" });
+  });
+
+  test("a legacy cycle row with a live index reports that index", () => {
+    const legacy = {
+      kind: "cycle",
+      label: "legacy",
+      names: ["a", "b"],
+      getIdx: () => 1,
+      setIdx: () => {},
+    };
+    const row = normalizeSettingRow(legacy);
+    if (row?.kind !== "cycle") throw new Error("expected a cycle row");
+    expect(row.get()).toEqual({ kind: "index", index: 1 });
+  });
+
+  test("the current cycle shape passes through unchanged", () => {
+    const row = normalizeSettingRow({
+      kind: "cycle",
+      label: "current",
+      names: ["a"],
+      get: () => ({ kind: "index", index: 0 }),
+      setIdx: () => {},
+    });
+    if (row?.kind !== "cycle") throw new Error("expected a cycle row");
+    expect(row.get()).toEqual({ kind: "index", index: 0 });
+  });
+
+  test("a malformed row is still dropped", () => {
+    expect(normalizeSettingRow({ kind: "toggle", label: "x" })).toBeNull();
+    expect(normalizeSettingRow({ kind: "cycle", label: "x", names: ["a"] })).toBeNull();
   });
 });
 
