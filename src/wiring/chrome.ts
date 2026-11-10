@@ -22,6 +22,7 @@ import { makeToolbar, toolbarItemIds, crumbItemIds, type PathEditPeer } from "..
 import { buildAppContainer, buildTitle } from "../ui/ui-boot-layout";
 import { warmEmbeddedIcons, warmSvgRenderer } from "../ui/icons";
 import { isLazyBoot } from "../lib/boot-mode";
+import { introPlayed, introReplayAllowed, type IntroReplayState } from "../lib/intro-replay";
 import type { NodeLike } from "../lib/node-like";
 import { makeNotify } from "../ui/notify";
 import { rasterSigOf } from "../ui/tty";
@@ -412,12 +413,14 @@ export const wireChrome = async (deps: {
   // but ONLY while the boot intro is still young (playedOnce + still staged):
   // navigate-time rebuilds (mount/eject/connect) must stay silent, and the
   // first renderAll's own build must not double the wave about to play.
-  let introPlayedAt = 0;
+  // The state is a NAMED record ("not-played" | { playedAt }) and the
+  // WINDOW is a pure decision (src/lib/intro-replay) — the old shape kept
+  // "never played" as a magic timestamp (0) and decided the window inline,
+  // with the clock baked in and a non-numeric duration turning the
+  // comparison into NaN (the replay fired on EVERY rebuild).
+  let introState: IntroReplayState = "not-played";
   const replaySidebarIntro = (): void => {
-    if (!introPlayedAt) return;
-    try {
-      if (Date.now() - introPlayedAt > core.config.ui.sidebarAnimationMs + 150) return;
-    } catch {}
+    if (!introReplayAllowed(introState, Date.now(), core.config.ui.sidebarAnimationMs)) return;
     try {
       sidebarIntro.play();
     } catch {}
@@ -691,7 +694,7 @@ export const wireChrome = async (deps: {
     // the boot step records the play time so a mounts-refresh rebuild inside
     // the intro window replays onto fresh nodes (see replaySidebarIntro)
     markIntroPlayed: () => {
-      introPlayedAt = Date.now();
+      introState = introPlayed(Date.now());
     },
     // the burst startup's reveal: the renderer's clear color goes back to
     // tfm's bg (the boot frame matched the TERMINAL's bg so it was invisible)

@@ -59,6 +59,22 @@ describe("the chrome wiring's path-edit registry", () => {
     expect(src.includes("core.bootMode")).toBe(true);
   });
 
+  test("the intro's replay state is a NAMED record, not a magic timestamp", async () => {
+    const src = (await Bun.file(`${import.meta.dir}/chrome.ts`).text())
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/\/\/[^\n]*/g, "");
+    // the state and the WINDOW decision live in the shared leaf — the old
+    // shape kept "never played" as the magic timestamp 0 and compared the
+    // age inline (the clock baked in, a non-numeric duration → NaN → the
+    // replay fired on every rebuild)
+    expect(src.includes('from "../lib/intro-replay"')).toBe(true);
+    expect(src.includes("introReplayAllowed(")).toBe(true);
+    expect(/let introPlayedAt = 0/.test(src)).toBe(false);
+    // the state starts NAMED ("not-played") and moves through the leaf
+    expect(/let introState: IntroReplayState = "not-played"/.test(src)).toBe(true);
+    expect(/introState = introPlayed\(/.test(src)).toBe(true);
+  });
+
   test("the late-bound impls are SLOTS, not no-op stubs", async () => {
     const src = (await Bun.file(`${import.meta.dir}/chrome.ts`).text())
       .replace(/\/\*[\s\S]*?\*\//g, "")
