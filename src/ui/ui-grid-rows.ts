@@ -63,7 +63,9 @@ export const thumbStatsChanged = (prev: Entry[] | null, next: Entry[]): boolean 
 // async raster lands (no icon->photo swap). Videos need ffmpeg for the
 // frame extract — without it they keep their icon. Files over the byte
 // cap keep their icon too (25 MiB of pixels is never worth the spawn). ---
-const thumbPlanFor = (
+// exported for the test: the thumbnail policy is a pure decision over the
+// entry + the file on disk (no renderer, no state)
+export const thumbPlanFor = (
   entry: Entry,
   key: string,
 ): { isVideo: boolean; stat: { size: number; mtimeMs: number } | null; useThumb: boolean } => {
@@ -73,11 +75,16 @@ const thumbPlanFor = (
   if (wantsThumb) {
     // recursive-search entries (and sort-filled listDir rows) already carry
     // size/mtime — reuse them instead of a second stat per thumbnail.
+    // A "stale-stats" row is NOT reused: the listings cache carries its
+    // numbers across passes and an in-place edit moves no dir mtime, so they
+    // may lag. The raster key is built from size+mtime — a stale key hits the
+    // OLD thumbnail in the disk cache → a stale picture on screen. So the row
+    // is re-stat'ed instead of trusted.
     // Links NEVER reuse: entry stats are link-own since the on-disk change,
     // but the raster reads target pixels, so the job key must be the target's
     // (an edited target photo would otherwise never re-raster)
-    if (!entry.isLink && entry.size !== undefined && entry.mtimeMs !== undefined)
-      stat = { size: entry.size, mtimeMs: entry.mtimeMs };
+    const statsUsable = entry.size !== undefined && entry.mtimeMs !== undefined && entry.statsState !== "stale-stats";
+    if (!entry.isLink && statsUsable) stat = { size: entry.size, mtimeMs: entry.mtimeMs };
     else {
       try {
         stat = statSync(key);

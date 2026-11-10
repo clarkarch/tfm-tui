@@ -777,16 +777,12 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
       if (screen.structural === structural && !thumbStatsChanged(screen.entries, entries)) {
         claimPaint("tiles", sig, structural, entries);
         lastContentSig = contentSigOf(entries);
-        // later window slides build rows from this snapshot — carry the stats
-        if (win.kind === "window") {
-          for (let i = 0; i < win.entries.length && i < entries.length; i++) {
-            const we = win.entries[i];
-            const e = entries[i];
-            if (!we || !e) continue;
-            we.size = e.size;
-            we.mtimeMs = e.mtimeMs;
-          }
-        }
+        // later window slides build their rows from THIS snapshot, so it must
+        // follow the listing — stats AND their freshness (a stale-stat row
+        // that lost its marker would key a raster on a number that may lag).
+        // The snapshot is REPLACED, not field-copied: a field-by-field copy
+        // forgets the next field that carries a fact.
+        if (win.kind === "window") win.entries = entries;
         if (isList) {
           for (let i = 0; i < entries.length; i++) {
             const e = entries[i];
@@ -1024,6 +1020,22 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
     // pads, so the anchor follows what is mounted
     let nextTopPad = w.topPad;
     let nextBotPad = w.botPad;
+    // The snapshot's stats were read in an EARLIER pass (the build that
+    // filled it): serving a row from it now means its numbers MAY lag a live
+    // edit (an in-place edit moves no dir mtime, so nothing bumped the
+    // listing's signature). Mark the rows we are about to build stale, so the
+    // thumbnail plan re-stats instead of keying a raster on an old number —
+    // the disk cache would then serve the OLD picture for the edited file.
+    // Only the rows being BUILT are marked (the windowed grid never walks
+    // the whole listing per notch — that is the point of the window).
+    const markRowStale = (r: number): void => {
+      const lo = isList ? r : r * cols;
+      const hi = isList ? r : Math.min(entries.length - 1, (r + 1) * cols - 1);
+      for (let i = lo; i <= hi; i++) {
+        const e = entries[i];
+        if (e && (e.size !== undefined || e.mtimeMs !== undefined)) e.statsState = "stale-stats";
+      }
+    };
     const paint = (a: number, b: number): void => {
       if (a > b) return;
       const lo = isList ? a : a * cols;
@@ -1074,6 +1086,7 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
         // the destroyed rows' refs name DEAD nodes: mark them unmounted BEFORE
         // the rebuild, which re-registers the rows that come back
         markUnmounted(old.r0, old.r1);
+        for (let r = r0; r <= r1; r++) markRowStale(r);
         scroller.content.add(buildInner(entries, isList, cols, rh, rows, r0, r1, visFirst, true));
         // the rebuilt inner carries NEW pads — re-anchor the identity contract
         // to them (keeping the stale anchor would make every later slide fall
@@ -1104,9 +1117,14 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
         };
         for (let r = old.r0; r < r0; r++) reapRow(r, kidAt(r));
         for (let r = old.r1; r > r1; r--) reapRow(r, kidAt(r));
-        for (let r = r0; r < old.r0; r++) mounted.add(buildRow(entries, isList, cols, rh, visFirst, r), 1 + (r - r0));
-        for (let r = Math.max(r0, old.r1 + 1); r <= r1; r++)
+        for (let r = r0; r < old.r0; r++) {
+          markRowStale(r);
+          mounted.add(buildRow(entries, isList, cols, rh, visFirst, r), 1 + (r - r0));
+        }
+        for (let r = Math.max(r0, old.r1 + 1); r <= r1; r++) {
+          markRowStale(r);
           mounted.add(buildRow(entries, isList, cols, rh, visFirst, r), mounted.getChildren().length - 1);
+        }
         // pads absorb the shift so the total content height never moves (the
         // offsets above come from the pre-mutation snapshot — node identity,
         // stable across the adds/removes)

@@ -20,6 +20,22 @@ export type Entry = {
   // drives the list-row link badge. Not part of the structural sig — a
   // retargeted link keeps its name, same documented staleness as isDir.
   isLink?: boolean;
+  // the STATS' freshness — the one thing a consumer cannot infer from the
+  // numbers themselves:
+  //   "fresh"      — size/mtime were read during the pass that produced this
+  //                  row (a scan, a stat fill, a search probe).
+  //   "stale-stats" — they rode along from an EARLIER pass and may lag a live
+  //                  edit: an in-place edit moves NO dir mtime, so the cache's
+  //                  dir signature cannot see it (the TTL is the only backstop).
+  //   undefined    — the row carries no stats at all.
+  // A consumer that KEYS on the stats (the thumbnail raster key) must not
+  // trust a "stale-stats" row: the key would hit the OLD raster in the disk
+  // cache → a stale picture on screen.
+  //
+  // KNOWN HOLE (same class, and the type says so): a symlink's isDir FOLLOWS
+  // ITS TARGET, and retargeting a link bumps no directory mtime → the routing
+  // lies until the listings-cache TTL expires. Nothing here can see it.
+  statsState?: "fresh" | "stale-stats";
 };
 
 // One collator for the whole process (JSC/Bun rebuilds collation data on every
@@ -93,6 +109,8 @@ const statEntries = (items: Array<{ path: string; mtimeMs?: number }>): Entry[] 
       size: link?.size ?? st.size,
       mtimeMs: it.mtimeMs ?? link?.mtimeMs ?? st.mtimeMs ?? 0,
       isLink: link?.isSymbolicLink() ?? false,
+      // probed just now → the stats are fresh by construction
+      statsState: "fresh",
     });
   }
   return out;
@@ -147,6 +165,11 @@ const scanDir = async (dir: string): Promise<Entry[]> => {
 // ONE stat fills size AND mtimeMs, so switching sorts later finds them present;
 // failed stats stay missing and are retried next call — never fake a zero.
 //
+// The rows it FILLS are marked "fresh" (their numbers were read NOW) and the
+// names it filled are RETURNED: the caller needs to know which rows it read
+// (the cache serves the rest as "stale-stats" — they were read in an earlier
+// pass and an in-place edit moves no dir mtime, so they may lag).
+//
 // Used by BOTH the GRID's list view and the listings cache's stat fill. It must
 // stay async: the old synchronous statSync loop it replaced froze the whole app
 // (this render, the frame loop, the toast spinner) for tens to hundreds of ms on
@@ -157,12 +180,13 @@ export const fillStatsInto = async (
   entries: Entry[],
   dir: string,
   deps?: { stat?: (p: string) => Promise<{ size: number; mtimeMs: number }>; concurrency?: number },
-): Promise<void> => {
+): Promise<Set<string>> => {
   // default follows NOTHING (lstat): the Size/mtime columns show link-own
   // bytes (on-disk cost, ls -l semantics) — a following default is how the
   // link row ended up repeating its target's size. Injected fakes keep working.
   const statFn = deps?.stat ?? ((p: string) => lstat(p));
   const workers = Math.max(1, Math.min(deps?.concurrency ?? 32, entries.length));
+  const filled = new Set<string>();
   let i = 0;
   const worker = async (): Promise<void> => {
     while (i < entries.length) {
@@ -173,10 +197,28 @@ export const fillStatsInto = async (
         const st = await statFn(e.abs ?? path.join(dir, e.name));
         e.size = st.size;
         e.mtimeMs = st.mtimeMs ?? 0;
+        // read NOW → the numbers are fresh
+        e.statsState = "fresh";
+        filled.add(e.name);
       } catch {}
     }
   };
   await Promise.all(Array.from({ length: workers }, worker));
+  return filled;
+};
+
+// The stats' freshness for a row we hand out:
+//   read during THIS pass          → "fresh"
+//   carried over from an earlier pass → "stale-stats" (an in-place edit moves
+//     no dir mtime, so the cache's dir signature cannot see it — the TTL is
+//     the only backstop)
+//   no stats at all                → no state
+// The state is computed HERE, per served row: the cache's own rows may carry
+// a verdict from the pass that filled them, and that verdict would be a lie
+// by the time the row is served (the numbers outlive the pass that read them).
+const statsStateFor = (e: Entry, filled: ReadonlySet<string>): Entry["statsState"] => {
+  if (e.size === undefined && e.mtimeMs === undefined) return undefined;
+  return filled.has(e.name) ? "fresh" : "stale-stats";
 };
 
 // raw scan (hidden INCLUDED — listDir filters per call so the showHidden
@@ -196,11 +238,14 @@ const loadEntries = async (
     // deliberately NOT refreshed (absolute staleness cap, not idle expiry)
     listings.delete(key);
     listings.set(key, hit);
-    if (o.fillStats) await fillStatsInto(hit.entries, dir);
-    return hit.entries.map((e) => ({ ...e }));
+    // the fill only touches the rows whose stats are MISSING — the rows that
+    // already carry a number keep the one they were read with (an earlier
+    // pass) → they are served as "stale-stats"
+    const filled = o.fillStats ? await fillStatsInto(hit.entries, dir) : new Set<string>();
+    return hit.entries.map((e) => ({ ...e, statsState: statsStateFor(e, filled) }));
   }
   const entries = await scanDir(dir);
-  if (o.fillStats) await fillStatsInto(entries, dir);
+  const filled = o.fillStats ? await fillStatsInto(entries, dir) : new Set<string>();
   listings.delete(key);
   listings.set(key, { sig, entries, t: o.now() });
   while (listings.size > LISTINGS_CAP) {
@@ -210,7 +255,7 @@ const loadEntries = async (
       break;
     }
   }
-  return entries.map((e) => ({ ...e }));
+  return entries.map((e) => ({ ...e, statsState: statsStateFor(e, filled) }));
 };
 
 // the hidden-name rule, in ONE place: a dot-prefixed path SEGMENT is hidden.
@@ -257,6 +302,8 @@ export const listDir = async (
       const got = statEntry(e.abs ?? path.join(dir, e.name));
       e.size = got.size;
       e.mtimeMs = got.mtimeMs;
+      // stat'ed just now → the numbers are fresh (the cache is off here)
+      if (got.size !== undefined) e.statsState = "fresh";
     }
   }
   return out.sort(compareEntries(sortBy, sortAsc));

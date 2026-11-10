@@ -2207,6 +2207,57 @@ describe("renderGrid (windowed grid)", () => {
     }
   });
 
+  test("a slide rebuilds an image row from the LIVE stat (the snapshot's numbers may lag)", async () => {
+    // The windowed grid keeps a SNAPSHOT of the listing; a row that scrolls
+    // back in is rebuilt from it — numbers read in an EARLIER pass. An in-place
+    // edit moves no dir mtime, so the snapshot's size may lag → the raster key
+    // would hit the OLD picture in the disk cache. The rebuilt row must use
+    // the LIVE stat.
+    const dir = mkdtempSync(path.join(os.tmpdir(), "tfm-grid-slidethumb-"));
+    const prevCwd = gridState.cwd;
+    const prevSortBy = gridState.sortBy;
+    const prevSortAsc = gridState.sortAsc;
+    windowedGridOn = true;
+    try {
+      const pic = path.join(dir, "a.png");
+      writeFileSync(pic, "x".repeat(500));
+      for (let i = 1; i <= 60; i++) writeFileSync(path.join(dir, `f${String(i).padStart(3, "0")}.txt`), "x");
+      gridState.cwd = dir;
+      // size-descending: the photo is the biggest → it sorts FIRST, and the
+      // size sort is what makes the listing carry stats at all
+      gridState.sortBy = "size";
+      gridState.sortAsc = false;
+      scroller.scrollTop = 0;
+      thumbJobs.length = 0;
+      await renderGrid();
+      await t.renderOnce();
+      expect(thumbJobs.find((j) => j.path === pic)?.size).toBe(500);
+
+      // the photo is edited in place: the dir mtime does NOT move, so the
+      // listing's signature says "nothing changed"
+      writeFileSync(pic, "x".repeat(900));
+
+      // scroll the row out of the window and back → it is REBUILT from the
+      // snapshot (whose size is the pre-edit number)
+      thumbJobs.length = 0;
+      scroller.scrollTop = 12; // two tile rows down: row 0 leaves the build window
+      syncWindow();
+      await t.renderOnce();
+      scroller.scrollTop = 0;
+      syncWindow();
+      await t.renderOnce();
+      expect(thumbJobs.filter((j) => j.path === pic).at(-1)?.size).toBe(900); // the LIVE size
+    } finally {
+      windowedGridOn = false;
+      scroller.scrollTop = 0;
+      gridState.sortBy = prevSortBy;
+      gridState.sortAsc = prevSortAsc;
+      gridState.cwd = prevCwd;
+      rmSync(dir, { recursive: true, force: true });
+      await renderGrid();
+    }
+  });
+
   test("scroll reveal fires for a sub-row notch that leaves the build window in place", async () => {
     // the build window only moves when firstRow crosses a row boundary, so a
     // 570 -> 575 notch changes nothing built — but row 99's top cell (y=594

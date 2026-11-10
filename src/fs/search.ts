@@ -163,6 +163,8 @@ export const searchTree = async (root: string, query: string, opts: SearchOpts =
           mtimeMs,
           abs: p,
           isLink,
+          // probed just now → the stats are fresh by construction
+          statsState: "fresh",
         };
       } catch {
         return null;

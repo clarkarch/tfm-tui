@@ -369,6 +369,31 @@ describe("listings cache", () => {
     }
   });
 
+  // The cached STATS can lag a live edit: an in-place edit moves NO dir
+  // mtime, so the cache's dir signature cannot see it. The serving path says
+  // so EXPLICITLY ("stale-stats") instead of letting a consumer trust a
+  // number that may be a lie (the thumbnail raster keys on it → a stale
+  // picture on screen).
+  test("a stat change within the TTL is explicitly marked stale", async () => {
+    const dir = mktmp("tfm-lc8-");
+    try {
+      const f = path.join(dir, "a.txt");
+      W(f, "x".repeat(500));
+      const fresh = await listDir(dir, false, "size", true, { now: T0 });
+      expect(fresh[0]!.size).toBe(500);
+      expect(fresh[0]!.statsState).toBe("fresh"); // read during THIS pass
+      writeFileSync(f, "x".repeat(900)); // in-place edit: the dir mtime does not move
+      const stale = await listDir(dir, false, "size", true, { now: () => 1000 });
+      expect(stale[0]!.size).toBe(500); // the cached number may lag…
+      expect(stale[0]!.statsState).toBe("stale-stats"); // …and it SAYS so
+      const aged = await listDir(dir, false, "size", true, { now: () => 3000 });
+      expect(aged[0]!.size).toBe(900); // the TTL rescan re-reads it
+      expect(aged[0]!.statsState).toBe("fresh");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   // sort-mode flip on a cached listing: the cache key is the dir, not the
   // sort — a name→size flip must re-sort the cached rows and fill the stats
   // the new sort needs (the path the applyConfig syncSortMode hook exercises)
@@ -426,6 +451,11 @@ describe("listings cache", () => {
     expect(entries[1]!.size).toBe(10);
     expect(entries[2]!.size).toBe(20);
     expect(entries[1]!.mtimeMs).toBe(7);
+    // the rows the fill READ are fresh (their numbers came from this pass) —
+    // the untouched row keeps whatever it had (a carried-over stat stays
+    // "stale-stats": the fill did not read it)
+    expect(entries[1]!.statsState).toBe("fresh");
+    expect(entries[2]!.statsState).toBe("fresh");
   });
 
   test("awaits every stat under a concurrency cap (the frame loop keeps running)", async () => {
