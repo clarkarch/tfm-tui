@@ -254,6 +254,11 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
           theme: { ...preset.theme },
           keys: { ...ctx.config.keys },
         });
+        // follow-terminal is off now, so a system-theme resolve in flight is
+        // STALE — tell the machine (its OFF path drops the query). Without
+        // this the pending query can land after the user comes back to
+        // System and apply an OLD terminal palette.
+        ctx.resolveSystemTheme?.();
       },
       // hand-edited themes match no preset: name the nearest one with a ~
       // prefix (picking any preset returns to an exact match). On the console

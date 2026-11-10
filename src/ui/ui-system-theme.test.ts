@@ -66,6 +66,41 @@ class FakeRenderer extends EventEmitter {
 
 const clone = (c: Config): Config => JSON.parse(JSON.stringify(c));
 
+// poll on observable state — never a fixed sleep
+const until = async (cond: () => boolean, label: string): Promise<void> => {
+  const deadline = Date.now() + 2000;
+  while (!cond()) {
+    if (Date.now() > deadline) throw new Error(`timeout waiting for ${label}`);
+    await Bun.sleep(5);
+  }
+};
+
+type Palette = {
+  palette: Array<string | null>;
+  defaultForeground: string | null;
+  defaultBackground: string | null;
+  cursorColor: string | null;
+};
+
+// a palette answer with a distinguishable bg — two concurrent queries must
+// be told apart by their result
+const paletteWith = (bg: string): Palette => ({
+  palette: [...PALETTE],
+  defaultForeground: "#c0caf5",
+  defaultBackground: bg,
+  cursorColor: "#ff9e64",
+});
+
+// a renderer whose palette leg is GATED per call: the test decides when each
+// query lands (the stale-landing rules are about ORDER, not timing)
+const gatedRenderer = () => {
+  const renderer = new FakeRenderer();
+  const gates: Array<(v: Palette) => void> = [];
+  (renderer as unknown as { getPalette: () => Promise<unknown> }).getPalette = () =>
+    new Promise((res) => gates.push(res as (v: Palette) => void));
+  return { renderer, gates };
+};
+
 // manual clock for the follow debounce (repo rule: timing units test on a
 // virtual clock — bun has no fake timers)
 const manualSched = () => {
@@ -377,6 +412,103 @@ describe("independent settle (B3)", () => {
     renderer.waitForThemeMode = () => new Promise(() => {}) as Promise<null>;
     expect(await sys.resolveSystemTheme(120)).toBe(true);
     expect(config.theme.bg).toBe("#1a1b26");
+  });
+});
+
+describe("resolve paths (D3.13)", () => {
+  // The boot derive and the runtime resolve are INDEPENDENT machines. The
+  // boot paints the FIRST frame, so a runtime resolve (a THEME_MODE event
+  // landing inside the boot window) must not drop it — otherwise the app
+  // starts on the preset and flips to the terminal theme a beat later.
+  test("a runtime resolve does not invalidate the boot resolve", async () => {
+    const config = clone(defaultConfig);
+    config.ui.followTerminal = true;
+    const { renderer, gates } = gatedRenderer();
+    const bootFired: unknown[] = [];
+    let applied = 0;
+    const sys = makeSystemTheme({
+      renderer: () => asRenderer(renderer),
+      config,
+      colors: { ...config.theme },
+      applyConfig: (fresh: Config) => {
+        applied++;
+        Object.assign(config.theme, fresh.theme);
+      },
+      onBootDerived: (t) => bootFired.push(t),
+    });
+    const bootP = sys.applyBootSystemTheme(2000);
+    await until(() => gates.length === 1, "the boot query");
+    const runP = sys.resolveSystemTheme(2000);
+    await until(() => gates.length === 2, "the runtime query");
+
+    // the BOOT's answer lands while the runtime query is still in flight
+    gates[0]!(paletteWith("#111111"));
+    expect(await bootP).toBe(true);
+    expect(bootFired).toHaveLength(1);
+    expect(config.theme.bg).toBe("#111111");
+
+    // the runtime's answer still lands — it is the newer query
+    gates[1]!(paletteWith("#222222"));
+    expect(await runP).toBe(true);
+    expect(applied).toBe(1);
+    expect(config.theme.bg).toBe("#222222");
+  });
+
+  test("an older boot landing does not clobber a newer runtime landing", async () => {
+    // the boot query STARTED first, so its answer is the older one — a late
+    // boot landing must not overwrite the runtime's newer result
+    const config = clone(defaultConfig);
+    config.ui.followTerminal = true;
+    const { renderer, gates } = gatedRenderer();
+    const sys = makeSystemTheme({
+      renderer: () => asRenderer(renderer),
+      config,
+      colors: { ...config.theme },
+      applyConfig: (fresh: Config) => {
+        Object.assign(config.theme, fresh.theme);
+      },
+    });
+    const bootP = sys.applyBootSystemTheme(2000);
+    await until(() => gates.length === 1, "the boot query");
+    const runP = sys.resolveSystemTheme(2000);
+    await until(() => gates.length === 2, "the runtime query");
+
+    gates[1]!(paletteWith("#222222"));
+    expect(await runP).toBe(true);
+    expect(config.theme.bg).toBe("#222222");
+
+    gates[0]!(paletteWith("#111111"));
+    expect(await bootP).toBe(false);
+    expect(config.theme.bg).toBe("#222222"); // the newer result survives
+  });
+
+  test("turning follow-terminal off drops the query in flight (even if it comes back on)", async () => {
+    // the flag check alone is not enough: the flag can come back on before
+    // the query lands, and the stale landing would then apply
+    const config = clone(defaultConfig);
+    config.ui.followTerminal = true;
+    const { renderer, gates } = gatedRenderer();
+    let applied = 0;
+    const sys = makeSystemTheme({
+      renderer: () => asRenderer(renderer),
+      config,
+      colors: { ...config.theme },
+      applyConfig: (fresh: Config) => {
+        applied++;
+        Object.assign(config.theme, fresh.theme);
+      },
+    });
+    const p = sys.resolveSystemTheme(2000);
+    await until(() => gates.length === 1, "the query");
+
+    // the user picks a preset (the flag goes off) — the machine is told
+    config.ui.followTerminal = false;
+    expect(await sys.resolveSystemTheme(50)).toBe(false);
+    // ...and back to System before the query lands
+    config.ui.followTerminal = true;
+    gates[0]!(paletteWith("#333333"));
+    expect(await p).toBe(false);
+    expect(applied).toBe(0);
   });
 });
 

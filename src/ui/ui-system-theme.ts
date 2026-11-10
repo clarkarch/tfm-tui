@@ -37,10 +37,28 @@ export type SystemThemeCtx = {
 
 type TerminalQuery = { input: TerminalPaletteInput; mode: TerminalThemeMode | null };
 
+// ONE resolve state per PATH. The boot derive and the runtime resolve are
+// INDEPENDENT machines: the boot paints the FIRST frame, so a runtime
+// resolve (a THEME_MODE event landing inside the boot window) must NOT drop
+// it — the app would start on the preset and flip to the terminal theme a
+// beat later (the reported "boot kept the preset, then flipped" symptom).
+type Resolve = { kind: "idle" } | { kind: "querying"; token: number };
+
 export const makeSystemTheme = (ctx: SystemThemeCtx) => {
-  // generation token: a slow query landing after the user moved on
-  // (System→preset, toggle-off, newer resolve) must not clobber live state
-  let gen = 0;
+  // ONE token issuer, so the tokens are COMPARABLE across the paths: a
+  // landing OLDER than what already applied is stale (the boot query starts
+  // first but can land last) and must not clobber the newer result.
+  let tokenSeq = 0;
+  // the token of the last result that was APPLIED (0 = none yet)
+  let appliedToken = 0;
+  let bootResolve: Resolve = { kind: "idle" };
+  let runtimeResolve: Resolve = { kind: "idle" };
+
+  // start a query: the new token supersedes the previous query on the SAME
+  // path only — the other path's query is independent
+  const startQuery = (): Resolve & { kind: "querying" } => ({ kind: "querying", token: ++tokenSeq });
+  // is this landing still the current query on its path?
+  const isCurrent = (state: Resolve, token: number): boolean => state.kind === "querying" && state.token === token;
 
   // settle one leg against its own bound — a slow theme-mode must never
   // discard a fast palette (mode falls back to bg-brightness inference)
@@ -118,13 +136,27 @@ export const makeSystemTheme = (ctx: SystemThemeCtx) => {
   // runtime path (settings toggle, live follow): full retheme via applyConfig.
   // 2000: same race as the boot budget (see queryTerminal).
   const resolveSystemTheme = async (timeoutMs = 2000): Promise<boolean> => {
-    if (!ctx.config.ui.followTerminal) return false;
-    const g = ++gen;
+    if (!ctx.config.ui.followTerminal) {
+      // follow-terminal is OFF: the query in flight on this path is STALE
+      // (the user picked a preset). Drop it HERE, not at the landing — the
+      // flag can come back on before the query lands, and the flag check
+      // alone would let that stale landing through.
+      runtimeResolve = { kind: "idle" };
+      return false;
+    }
+    const query = startQuery();
+    runtimeResolve = query;
     const theme = await queryAndDerive(timeoutMs);
-    // a newer resolve (or toggle-off) won while the query was in flight —
+    // a newer resolve on this path won while the query was in flight —
     // the landing is stale, drop it instead of clobbering live state
-    if (g !== gen || !ctx.config.ui.followTerminal) return false;
+    if (!isCurrent(runtimeResolve, query.token)) return false;
+    runtimeResolve = { kind: "idle" };
+    // a NEWER query already applied (the boot derive can land after a
+    // runtime resolve) — this result is the older one, drop it
+    if (appliedToken > query.token) return false;
+    if (!ctx.config.ui.followTerminal) return false;
     if (!theme) return false;
+    appliedToken = query.token;
     ctx.applyConfig({ ui: { ...ctx.config.ui }, theme, keys: { ...ctx.config.keys } });
     try {
       ctx.scheduleSaveConfig?.();
@@ -139,15 +171,28 @@ export const makeSystemTheme = (ctx: SystemThemeCtx) => {
   // this window (see queryTerminal) — 250 lost it every single boot, so the
   // first frame painted the preset and the theme flipped after the intros.
   const applyBootSystemTheme = async (timeoutMs = 2000): Promise<boolean> => {
-    if (!ctx.config.ui.followTerminal) return false;
+    if (!ctx.config.ui.followTerminal) {
+      bootResolve = { kind: "idle" };
+      return false;
+    }
     // tty/console mode paints the static console palette and applyConfig
     // skips the truecolor bg; boot must match or the first frame is derived
     // while themeSig believes the console theme is active
-    if (ctx.isTtyMode?.()) return false;
-    const g = ++gen;
+    if (ctx.isTtyMode?.()) {
+      bootResolve = { kind: "idle" };
+      return false;
+    }
+    const query = startQuery();
+    bootResolve = query;
     const theme = await queryAndDerive(timeoutMs);
-    if (g !== gen || !ctx.config.ui.followTerminal) return false;
+    if (!isCurrent(bootResolve, query.token)) return false;
+    bootResolve = { kind: "idle" };
+    // a NEWER query already applied (a runtime resolve landed first) — this
+    // boot answer is the older one, drop it
+    if (appliedToken > query.token) return false;
+    if (!ctx.config.ui.followTerminal) return false;
     if (!theme) return false;
+    appliedToken = query.token;
     Object.assign(ctx.config.theme, theme);
     Object.assign(ctx.colors, theme);
     if (ctx.config.ui.transparentBg === "off") ctx.colors.bg = bumpHex(ctx.colors.bg);

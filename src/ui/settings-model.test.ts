@@ -974,6 +974,22 @@ describe("hand-written rows", () => {
     expect(h.config.theme).toEqual(THEME_PRESETS[0]!.theme);
   });
 
+  test("picking a preset tells the theme machine a pending resolve is stale", () => {
+    // follow-terminal is OFF after the pick — the machine must be told, or a
+    // query in flight can land later (after the user comes back to System)
+    // and apply an OLD terminal palette
+    let resolved = 0;
+    const h = mk();
+    (h.ctx as SettingsModelCtx).resolveSystemTheme = () => {
+      resolved++;
+    };
+    asCycle(h.byLabel("theme")).setIdx(0); // System
+    expect(resolved).toBe(1);
+    asCycle(h.byLabel("theme")).setIdx(1); // a preset
+    expect(h.config.ui.followTerminal).toBe(false);
+    expect(resolved).toBe(2);
+  });
+
   test("no standalone follow-terminal row exists (System owns the knob)", () => {
     const h = mk();
     expect(h.rows().filter((r) => r.label === "follow terminal")).toHaveLength(0);
