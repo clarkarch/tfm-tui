@@ -27,6 +27,7 @@ import {
   rmTrashInfoForPath,
   safeRestoreMove,
   shouldToast,
+  SourceRemovalFailedError,
   tmpName,
   trashDir,
   trashIfSameFile,
@@ -885,7 +886,10 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
               // would lose everything. Keep it and report loudly. The sudo
               // retry is told to retry ONLY the removal.
               outcome = outcomeSourceRemovalFailed(outcomeId(outcome));
-              throw new Error(`source partially removed: ${fsErrText(err)}`);
+              // the wrapper keeps the ORIGINAL error: the privilege fact
+              // travels with it (the message alone is prose — the detector
+              // must not guess "permission denied" out of a sentence)
+              throw new SourceRemovalFailedError(target, err);
             }
           } else await fsMove(src, target);
           recordSuccess();
@@ -909,7 +913,7 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
                   try {
                     await sudoRemove(src);
                   } catch (rmErr) {
-                    throw new Error(`source partially removed: ${fsErrText(rmErr)}`);
+                    throw new SourceRemovalFailedError(target, rmErr);
                   }
                 } else if (op === "copy" || isCrossDevice(src, destDir)) {
                   const occupied = await lstat(target).then(
@@ -930,7 +934,7 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
                       // the copy landed and the source could not be removed:
                       // the target is now the only complete data — keep it
                       outcome = outcomeSourceRemovalFailed(outcomeId(outcome));
-                      throw new Error(`source partially removed: ${fsErrText(rmErr)}`);
+                      throw new SourceRemovalFailedError(target, rmErr);
                     }
                   }
                 } else await sudoMove(src, target);

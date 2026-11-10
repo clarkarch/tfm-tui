@@ -3,6 +3,7 @@ import { accessSync, constants, existsSync, lstatSync, readdirSync, readFileSync
 import os from "node:os";
 import path from "node:path";
 import { pathToUri } from "./uri";
+import { PrivilegeError } from "./privilege-error";
 import { swallow } from "../lib/log";
 
 // --- Deterministic fs+path operations: the primitives runTransfer, trash and
@@ -246,6 +247,9 @@ export const fsErrText = (err: unknown): string => {
   if (err instanceof TrashPartialMoveError) return err.message;
   // a landing that left something behind names the path — same rule
   if (err instanceof TransferLandingError) return err.message;
+  // a privilege refusal reads as "permission denied" (the sudo layer has no
+  // errno — it classified the child's stderr and threw the normalized type)
+  if (err instanceof PrivilegeError) return "permission denied";
   const code = errCode(err);
   if (typeof code === "string") return FS_ERR_TEXT[code] ?? code.toLowerCase();
   return err instanceof Error ? (err.message.split(":")[0]?.toLowerCase() ?? "unknown error") : "unknown error";

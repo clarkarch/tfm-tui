@@ -12,7 +12,8 @@ import {
   sudoOpenArgv,
   sudoRmArgv,
 } from "./elevate";
-import { errCode, fsErrText } from "./fsutil";
+import { PrivilegeError } from "./privilege-error";
+import { errCode, fsErrText, SourceRemovalFailedError } from "./fsutil";
 
 describe("isPrivilegeError", () => {
   test("EACCES/EPERM qualify, others do not", () => {
@@ -21,8 +22,21 @@ describe("isPrivilegeError", () => {
     expect(isPrivilegeError({ code: "ENOENT" })).toBe(false);
     expect(isPrivilegeError(new Error("some other failure"))).toBe(false);
   });
-  test("wrapped source-partially-removed with permission denied qualifies", () => {
-    expect(isPrivilegeError(new Error("source partially removed: permission denied"))).toBe(true);
+  test("a non-privilege error with permission-denied TEXT does not trigger sudo", () => {
+    // the old detector matched the prose anywhere in the message, so a stray
+    // "permission denied" (a remote host's message, a tool's own wording)
+    // asked the user for a ROOT PASSWORD — the privilege fact must travel
+    // with the error, not be guessed from its text
+    expect(isPrivilegeError(new Error("the remote host said: permission denied"))).toBe(false);
+    expect(isPrivilegeError(new Error("permission denied"))).toBe(false);
+  });
+  test("a source-partially-removed wrapper qualifies when the removal error was privileged", () => {
+    // the wrapper keeps the ORIGINAL error, so the fact travels with it —
+    // the old "the message says permission denied" match was the bug
+    const inner = Object.assign(new Error("rm: EACCES"), { code: "EACCES" });
+    expect(isPrivilegeError(new SourceRemovalFailedError("/dest", inner))).toBe(true);
+    // ... and a wrapper whose inner error was NOT privileged does not qualify
+    expect(isPrivilegeError(new SourceRemovalFailedError("/dest", new Error("device busy")))).toBe(false);
   });
 });
 
@@ -116,6 +130,22 @@ describe("sudoExecError", () => {
     expect(err.message).toBe("cp: cannot create regular file 'x': Permission denied");
     expect(fsErrText(err)).toBe("permission denied");
   });
+  test("the refusal is the NORMALIZED type, not a prose match", () => {
+    // the sudo layer knows what a refusal looks like — it classifies the
+    // child's stderr ONCE and throws the one type the detector understands
+    expect(sudoExecError("cp: cannot create regular file 'x': Permission denied\n")).toBeInstanceOf(PrivilegeError);
+    // a failure that is NOT a refusal stays a plain error (no code, no type)
+    const other = sudoExecError("cp: omitting directory 'x'\n");
+    expect(other).not.toBeInstanceOf(PrivilegeError);
+  });
+  test("a sudo failure with unusual wording is still a privilege error", () => {
+    // EPERM's strerror is "Operation not permitted" — the old matcher only
+    // knew "Permission denied", so a privileged failure worded the other way
+    // was MISSED and the escalation never happened
+    const err = sudoExecError("cp: cannot create regular file 'x': Operation not permitted\n");
+    expect(isPrivilegeError(err)).toBe(true);
+    expect(fsErrText(err)).toBe("permission denied");
+  });
   test("other stderr stays raw without a code", () => {
     const err = sudoExecError("cp: omitting directory 'x'\n");
     expect(fsErrText(err)).toBe("cp");
@@ -123,6 +153,8 @@ describe("sudoExecError", () => {
   });
   test("empty stderr degrades to permission denied", () => {
     expect(fsErrText(sudoExecError(""))).toBe("permission denied");
+    // a silent refusal is still a refusal (the old default said so)
+    expect(isPrivilegeError(sudoExecError(""))).toBe(true);
   });
 });
 

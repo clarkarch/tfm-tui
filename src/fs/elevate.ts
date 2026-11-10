@@ -1,17 +1,24 @@
 // --- sudo escalation leaf: privilege-error classification, exact sudo argv,
 // and the cached-timestamp-first auth flow. No ui/renderer/state imports —
 // callers inject prompt/notify/exec seams so tests never touch real sudo. ---
-import { errCode } from "./fsutil";
+import { errCode, SourceRemovalFailedError, TrashPartialMoveError } from "./fsutil";
+import { PrivilegeError } from "./privilege-error";
 import { errMessage } from "../lib/uiutil";
 import { whichLive } from "./which";
 
 export const isPrivilegeError = (err: unknown): boolean => {
+  // the normalized type — the sudo layer throws it (its own stderr has no
+  // errno, so the layer classifies the output and says so with the type)
+  if (err instanceof PrivilegeError) return true;
+  // the OS's own encoding: a raw fs failure carries its errno
   const code = errCode(err);
   if (code === "EACCES" || code === "EPERM") return true;
-  // fsMove wraps cross-device rm failures as "source partially removed: <text>"
-  // where the inner text already went through fsErrText ("permission denied");
-  // tool stderr uses capital "Permission denied" — match case-insensitively
-  if (err instanceof Error && /permission denied/i.test(err.message)) return true;
+  // a wrapper that kept the ORIGINAL error carries the fact with it: the
+  // wrapper's own message is prose ("source partially removed: …") and must
+  // NOT be re-read as a fact — only the error it kept may be classified
+  if (err instanceof SourceRemovalFailedError || err instanceof TrashPartialMoveError) {
+    return isPrivilegeError(err.removalError);
+  }
   return false;
 };
 
@@ -66,18 +73,30 @@ export const ensureSudoAuth = async (deps: SudoAuthDeps, opLabel = "file operati
   return false;
 };
 
-// sudo child failed: keep the tool's first stderr line as the message, but
-// carry EACCES when it says permission denied — otherwise fsErrText reduces
-// "cp: …: Permission denied" to "cp" (message.split(":")[0]).
+// The sudo layer's OWN classifier: a child that ran and was refused. This is
+// the ONE place that reads a child's stderr, so the text match belongs HERE
+// (at the boundary that interprets the tool's output) and not in the
+// detector — a detector that matched prose classified every stray mention
+// of "permission denied" as a privilege failure.
+// The two strerror forms of the privilege errnos are both refused here:
+// EACCES says "Permission denied", EPERM says "Operation not permitted".
+const PRIVILEGE_REFUSAL = /permission denied|operation not permitted/i;
+
+// sudo child failed: keep the tool's first stderr line as the message, and
+// throw the NORMALIZED type when the child was refused — otherwise
+// fsErrText reduces "cp: …: Permission denied" to "cp" (message.split(":")[0]).
 export const sudoExecError = (stderr: string): Error => {
   const line =
     stderr
       .split("\n")
       .map((l) => l.trim())
-      .find(Boolean) ?? "permission denied";
-  const err = new Error(line) as Error & { code?: string };
-  if (/permission denied/i.test(stderr)) err.code = "EACCES";
-  return err;
+      .find(Boolean) ?? "";
+  if (line === "") {
+    // a silent refusal (the old default message said so) — still a refusal
+    return new PrivilegeError("permission denied");
+  }
+  if (PRIVILEGE_REFUSAL.test(stderr)) return new PrivilegeError(line);
+  return new Error(line);
 };
 
 // The sudo-tool runner + default exec, shared by fileops (copy/move/remove)
