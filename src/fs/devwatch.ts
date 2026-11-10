@@ -32,25 +32,43 @@ type DeviceWatcherCtx = {
 
 export const DEVICE_POLL_MS = 1000;
 
+// The device set seen on the last SUCCESSFUL poll. `parts` fingerprints
+// every block device (device + target, target empty when unmounted): the
+// kernel creates /dev nodes with NO mountpoint on plug, so a target-only
+// fingerprint sleeps through physical plug/unplug of unmounted drives.
+// Arrivals stay keyed by whole disk (one toast per drive) and include
+// unmounted partitions (their row is click-to-mount).
+export type DeviceSnapshot = {
+  readonly parts: Set<string>;
+  readonly disks: Set<string>;
+  readonly usb: Map<string, MountEntry[]>;
+};
+
+// ONE record for the watcher's lifecycle. The three facts used to live in
+// three variables (stopped / inFlight / last) and every guard was their
+// conjunction — a fourth fact would have silently broken it. The record
+// names the states instead:
+//   "idle"     — armed; the next tick polls. The baseline is the last
+//                SUCCESSFUL device set (null until the first one lands).
+//   "polling"  — a probe is in flight; it owns the device set, so a tick
+//                that arrives meanwhile is skipped.
+//   "stopped"  — dead: no tick polls, and a probe that lands afterwards
+//                announces nothing (the stopped phase owns the landing).
+// "stopped" and "polling" are mutually exclusive — the old shape could be
+// dead AND probing at once, and the landing had to check both.
+export type WatchState =
+  | { readonly kind: "idle"; readonly baseline: DeviceSnapshot | null }
+  | { readonly kind: "polling"; readonly baseline: DeviceSnapshot | null }
+  | { readonly kind: "stopped"; readonly baseline: DeviceSnapshot | null };
+
 export const makeDeviceWatcher = (ctx: DeviceWatcherCtx) => {
   const sched: Scheduler = ctx.sched ?? globalThis;
   const intervalMs = (): number =>
     Math.max(250, typeof ctx.intervalMs === "function" ? ctx.intervalMs() : (ctx.intervalMs ?? DEVICE_POLL_MS));
   let timer: unknown = null;
-  let stopped = false;
-  let inFlight = false;
-  // device presence + mount state seen on the last settled poll; null = no
-  // baseline yet (the first poll captures silently, never announces).
-  // `parts` fingerprints every block device (device + target, target empty
-  // when unmounted): the kernel creates /dev nodes with NO mountpoint on
-  // plug, so a target-only fingerprint sleeps through physical plug/unplug
-  // of unmounted drives. Arrivals stay keyed by whole disk (one toast per
-  // drive) and include unmounted partitions (their row is click-to-mount).
-  let last: { parts: Set<string>; disks: Set<string>; usb: Map<string, MountEntry[]> } | null = null;
+  let state: WatchState = { kind: "idle", baseline: null };
 
-  const snapshot = (
-    entries: MountEntry[],
-  ): { parts: Set<string>; disks: Set<string>; usb: Map<string, MountEntry[]> } => {
+  const snapshot = (entries: MountEntry[]): DeviceSnapshot => {
     const parts = new Set<string>();
     const disks = new Set<string>();
     const usb = new Map<string, MountEntry[]>();
@@ -67,36 +85,41 @@ export const makeDeviceWatcher = (ctx: DeviceWatcherCtx) => {
   };
 
   const poll = (): void => {
-    if (stopped || inFlight) return;
-    inFlight = true;
+    // only an IDLE watcher polls: a probe in flight owns the device set,
+    // and a stopped watcher is dead
+    if (state.kind !== "idle") return;
+    const prior = state.baseline;
+    state = { kind: "polling", baseline: prior };
     Promise.resolve()
       .then(() => ctx.devices())
       .then(
         (entries) => {
-          inFlight = false;
-          if (stopped) return;
+          // a stop during the probe WINS: the landing announces nothing
+          if (state.kind === "stopped") return;
           // A FAILED probe (null) is UNKNOWN, not an empty device set: keep
           // the old baseline so the next tick retries instead of reading the
           // failure as an unplug-all (and then announcing every drive as new
           // on the next success). It is an expected state, not a crash.
           if (entries === null) {
             ctx.log?.("devwatch probe failed: keeping the last device set");
+            state = { kind: "idle", baseline: prior };
             return;
           }
-          const { parts, disks, usb } = snapshot(entries);
-          if (last === null) {
+          const next = snapshot(entries);
+          if (prior === null) {
             // baseline capture: boot-present drives stay silent
-            last = { parts, disks, usb };
+            state = { kind: "idle", baseline: next };
             return;
           }
-          const prev = last;
           const arrived: MountEntry[] = [];
-          for (const [disk, group] of usb) {
-            if (!prev.disks.has(disk)) arrived.push(...group);
+          for (const [disk, group] of next.usb) {
+            if (!prior.disks.has(disk)) arrived.push(...group);
           }
           const changed =
-            arrived.length > 0 || parts.size !== prev.parts.size || [...parts].some((p) => !prev.parts.has(p));
-          last = { parts, disks, usb };
+            arrived.length > 0 ||
+            next.parts.size !== prior.parts.size ||
+            [...next.parts].some((p) => !prior.parts.has(p));
+          state = { kind: "idle", baseline: next };
           if (arrived.length > 0) {
             try {
               ctx.onArrivals(arrived);
@@ -117,14 +140,15 @@ export const makeDeviceWatcher = (ctx: DeviceWatcherCtx) => {
           // baseline: next tick retries instead of announcing every drive
           // as new (an error resolving to [] would look like an unplug-all
           // followed by a re-plug-all)
-          inFlight = false;
+          if (state.kind === "stopped") return;
           ctx.log?.(`devwatch poll failed: ${err}`);
+          state = { kind: "idle", baseline: prior };
         },
       );
   };
 
   const arm = (): void => {
-    if (stopped) return;
+    if (state.kind === "stopped") return;
     timer = sched.setTimeout(() => {
       timer = null;
       poll();
@@ -134,8 +158,11 @@ export const makeDeviceWatcher = (ctx: DeviceWatcherCtx) => {
   arm();
 
   return {
+    // the live record — a caller can ask where the watcher is without
+    // reading its internals
+    state: (): WatchState => state,
     stop: () => {
-      stopped = true;
+      state = { kind: "stopped", baseline: state.baseline };
       if (timer !== null) {
         try {
           sched.clearTimeout(timer);

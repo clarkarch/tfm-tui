@@ -229,6 +229,87 @@ describe("makeDeviceWatcher", () => {
     expect(h.clock.pendingCount()).toBe(0);
   });
 
+  test("the watcher reports its lifecycle as ONE explicit record", async () => {
+    // the lifecycle used to live in three variables (stopped / inFlight /
+    // last) and every guard was their conjunction; the record names the
+    // states, so a caller can ask where the watcher is
+    let release!: () => void;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const clock = makeClock();
+    const w = makeDeviceWatcher({
+      devices: () => gate.then(() => [entry(STICK)]),
+      onArrivals: () => {},
+      onChange: () => {},
+      intervalMs: 2500,
+      sched: clock.sched,
+    });
+    // armed, nothing seen yet
+    expect(w.state().kind).toBe("idle");
+    expect(w.state().baseline).toBeNull();
+    // a probe in flight owns the device set
+    await clock.step(1);
+    expect(w.state().kind).toBe("polling");
+    // it settles: idle again, and the baseline is the device set it saw
+    release();
+    await clock.step(1);
+    expect(w.state().kind).toBe("idle");
+    expect(w.state().baseline).not.toBeNull();
+    // dead
+    w.stop();
+    expect(w.state().kind).toBe("stopped");
+  });
+
+  test("a probe that lands after stop() announces nothing", async () => {
+    // the stopped phase OWNS the landing: a probe that was in flight when
+    // stop() ran must not announce an arrival or a change afterwards (the
+    // old shape kept `stopped` and `inFlight` side by side — "dead AND
+    // probing" — and the landing had to check both)
+    let release!: () => void;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const clock = makeClock();
+    const arrivals: MountEntry[][] = [];
+    let changes = 0;
+    const w = makeDeviceWatcher({
+      devices: () => gate.then(() => [entry(STICK)]),
+      onArrivals: (news) => arrivals.push(news),
+      onChange: () => changes++,
+      intervalMs: 2500,
+      sched: clock.sched,
+    });
+    await clock.step(1); // the probe parks on the gate
+    expect(w.state().kind).toBe("polling");
+    w.stop();
+    expect(w.state().kind).toBe("stopped");
+    release();
+    await clock.step(1);
+    expect(arrivals).toEqual([]);
+    expect(changes).toBe(0);
+    expect(w.state().kind).toBe("stopped");
+  });
+
+  test("a re-plug with the same pairs is detected (the arrival fires again)", async () => {
+    // the stick goes away and comes back with the SAME device+target pairs:
+    // the gap was OBSERVED, so the arrival fires again and the sidebar
+    // refreshes. (The gap that was never observed — a sub-interval unplug —
+    // is invisible to any polling watcher, and the gap eaten by a failed
+    // probe is E4's deliberate "unknown, keep the baseline".)
+    const h = harness([entry(STICK)]);
+    await h.clock.step(1); // baseline capture
+    h.setDevices([]); // unplugged
+    await h.clock.step(1);
+    expect(h.arrivals).toEqual([]);
+    expect(h.changes()).toBe(1);
+    h.setDevices([entry(STICK)]); // re-plugged — identical pairs
+    await h.clock.step(1);
+    expect(h.arrivals.length).toBe(1);
+    expect(h.changes()).toBe(2);
+    h.w.stop();
+  });
+
   test("a physically plugged drive with no mountpoint still arrives", async () => {
     // the kernel creates /dev/sdb1 with NO target on plug (mount comes
     // later, if ever) — a target-only fingerprint sleeps through the plug
