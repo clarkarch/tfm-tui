@@ -114,7 +114,7 @@ describe("runDefaultFileManagerCli", () => {
       recordedAnswer: () => "yes",
       entryInstalled: () => true,
       serviceInstalled: () => false,
-      nameOwned: () => false,
+      nameOwned: () => ({ ok: true, owned: false }),
     });
     const text = c.out.join("\n");
     // no activator + nobody holding the name = next ShowItems cold-starts nautilus
@@ -131,9 +131,28 @@ describe("runDefaultFileManagerCli", () => {
       recordedAnswer: () => "yes",
       entryInstalled: () => true,
       serviceInstalled: () => true,
-      nameOwned: () => true,
+      nameOwned: () => ({ ok: true, owned: true }),
     });
     expect(c.out.join("\n")).toContain("name owned: yes");
+  });
+
+  test("an unknown name probe says UNKNOWN (it never claims the name is free)", async () => {
+    const c = collect();
+    await runDefaultFileManagerCli(["status"], {
+      ...c.deps,
+      currentDefault: () => "tfm.desktop",
+      recordedAnswer: () => "yes",
+      entryInstalled: () => true,
+      serviceInstalled: () => true,
+      // the probe could not run (no busctl, no bus) — that is NOT "nobody
+      // owns the name", and the status must say so instead of staying quiet
+      nameOwned: () => ({ ok: false, reason: "unavailable" }),
+    });
+    const text = c.out.join("\n");
+    expect(text).toContain("name owned: unknown");
+    expect(text).not.toContain("name owned: no");
+    // and the "quit the current owner" hint belongs to a KNOWN free name
+    expect(text).not.toContain("quit the current owner");
   });
 
   test("forget deletes the marker so the prompt asks again", async () => {

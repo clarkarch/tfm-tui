@@ -7,6 +7,7 @@ import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { xdgDataHome } from "../fs/uri";
+import type { Probe } from "../lib/probe";
 import { errMessage } from "../lib/uiutil";
 import {
   tagFromRedirect,
@@ -101,25 +102,29 @@ export const fetchLatestTag = async (
   }
 };
 
-// Does a release with this tag exist? true = yes, false = no (404),
-// null = couldn't ask (offline, rate limited, a status we don't read as an
-// answer). The caller must treat null as "unknown", NOT as "no": the
-// installer still tries, and it reports a missing release in its own words.
+// Does a release with this tag exist? The answer is a RECORD, never a
+// nullable boolean: `false` ("no such release") and `null` ("couldn't ask")
+// were both falsy, and the difference between them is the entire safety
+// property of the --tag check. {ok:true, exists} is an ANSWER (the probe
+// ran); {ok:false, reason:"offline"} is NOT (the caller proceeds and lets
+// the installer report a missing release in its own words).
+export type ReleaseExists = Probe<{ exists: boolean }>;
+
 export const releaseExists = async (
   tag: string,
   deps: { fetch?: UpdateFetch; signal?: AbortSignal } = {},
-): Promise<boolean | null> => {
+): Promise<ReleaseExists> => {
   const f = deps.fetch ?? defaultFetch;
   try {
     const res = await f(UPDATE_RELEASE_TAG_URL(tag), {
       method: "HEAD",
       signal: deps.signal ?? AbortSignal.timeout(UPDATE_TIMEOUT_MS),
     });
-    if (res.status === 404) return false;
-    if (res.ok) return true;
-    return null;
+    if (res.status === 404) return { ok: true, exists: false };
+    if (res.ok) return { ok: true, exists: true };
+    return { ok: false, reason: "offline" };
   } catch {
-    return null;
+    return { ok: false, reason: "offline" };
   }
 };
 

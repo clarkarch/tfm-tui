@@ -127,8 +127,10 @@ export const runUpdateCli = async (args: string[], deps: UpdateCliDeps = {}): Pr
   // answer is unknown (offline) the install still runs and reports itself.
   if (parsed.tag !== null) {
     const tag = tagFor(latest);
-    const exists = await releaseExists(tag, deps.fetch ? { fetch: deps.fetch } : {});
-    if (exists === false) {
+    const probe = await releaseExists(tag, deps.fetch ? { fetch: deps.fetch } : {});
+    // only an ANSWER can say "there is no such release" — an unknown probe
+    // (offline) proceeds, and the installer reports the missing tag itself
+    if (probe.ok && !probe.exists) {
       err(`tfm: there's no release ${tag}`);
       const tags = await fetchReleaseTags(deps.fetch ? { fetch: deps.fetch } : {});
       // stable versions first — the alphas are noise for someone who typed

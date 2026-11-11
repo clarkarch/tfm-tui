@@ -10,6 +10,7 @@ import {
   installInfoPath,
   isDevBuild,
   readInstallInfo,
+  releaseExists,
   runInstaller,
   type InstallerSpawn,
   type UpdateFetch,
@@ -75,6 +76,39 @@ describe("latest tag (network seam)", () => {
       },
     });
     expect(tag).toBeNull();
+  });
+});
+
+describe("the release probe (an unknown is NOT a payload)", () => {
+  test("a 404 is an ANSWER: the release does not exist", async () => {
+    expect(
+      await releaseExists("v1.0.0", {
+        fetch: async () => ({ ok: false, status: 404, headers: { get: () => null }, text: async () => "" }),
+      }),
+    ).toEqual({ ok: true, exists: false });
+  });
+
+  test("a 200 is an ANSWER: the release exists", async () => {
+    expect(await releaseExists("v1.0.0", { fetch: async () => okText("") })).toEqual({ ok: true, exists: true });
+  });
+
+  test("offline is NOT an answer: the probe could not run", async () => {
+    // the old shape carried "couldn't ask" as a null INSIDE a boolean, so
+    // `false` (no such release) and `null` (no answer) were both falsy —
+    // the whole safety of the --tag check lived in one `=== false`
+    expect(
+      await releaseExists("v1.0.0", {
+        fetch: async () => {
+          throw new Error("getaddrinfo ENOTFOUND");
+        },
+      }),
+    ).toEqual({ ok: false, reason: "offline" });
+    // a status we don't read as an answer is the same state
+    expect(
+      await releaseExists("v1.0.0", {
+        fetch: async () => ({ ok: false, status: 500, headers: { get: () => null }, text: async () => "" }),
+      }),
+    ).toEqual({ ok: false, reason: "offline" });
   });
 });
 

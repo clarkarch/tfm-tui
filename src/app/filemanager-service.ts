@@ -1,6 +1,7 @@
 import os from "node:os";
 import path from "node:path";
 import { errMessage } from "../lib/uiutil";
+import type { Probe } from "../lib/probe";
 import { makeTeardownState } from "../lib/teardown-state";
 import { planShowFolders, planShowItems, type ShowPlan } from "../dnd/filemanager1";
 import { whichLive } from "../fs/which";
@@ -212,40 +213,54 @@ export const resolveServiceExec = (): string => {
 };
 
 // is the well-known name currently owned (by anyone)? Best-effort busctl
-// probe for `status` (null = unknown: no busctl, no bus). Short timeout —
-// a wedged busctl must never hang the CLI.
-export const probeNameOwned = async (): Promise<boolean | null> => {
+// probe. The answer is a RECORD: {ok:true, owned} is an ANSWER (the bus
+// answered), {ok:false, reason:"unavailable"} is NOT (no busctl, no bus, an
+// answer we cannot read). The old shape carried "couldn't ask" as a null
+// INSIDE a boolean, so "nobody owns it" and "we couldn't ask" were both
+// falsy — and a caller that wrote `if (!owned)` claimed the name was free.
+export type NameOwned = Probe<{ owned: boolean }>;
+
+// the busctl call, isolated so the probe is testable without a session bus
+export type BusctlProbe = (argv: string[]) => Promise<string>;
+
+const defaultBusctlProbe: BusctlProbe = async (argv) => {
+  const proc = Bun.spawn(argv, {
+    stdout: "pipe",
+    stderr: "ignore",
+    stdin: "ignore",
+    timeout: 3000,
+    // the live PATH — Bun.spawn resolves the binary against the PATH it
+    // cached at process start unless the env is passed fresh (same class
+    // as Bun.which: src/fs/which.ts passes { PATH } for this reason)
+    env: { ...process.env },
+  });
+  const out = (await new Response(proc.stdout).text()).trim();
+  await proc.exited;
+  return out;
+};
+
+// Short timeout — a wedged busctl must never hang the CLI. A missing
+// busctl (Bun.spawn throws synchronously) is an "unavailable" probe, never
+// a crash and never a "no".
+export const probeNameOwned = async (deps: { run?: BusctlProbe } = {}): Promise<NameOwned> => {
+  const run = deps.run ?? defaultBusctlProbe;
   try {
-    const proc = Bun.spawn(
-      [
-        "busctl",
-        "--user",
-        "call",
-        "org.freedesktop.DBus",
-        "/org/freedesktop/DBus",
-        "org.freedesktop.DBus",
-        "NameHasOwner",
-        "s",
-        SERVICE_NAME,
-      ],
-      {
-        stdout: "pipe",
-        stderr: "ignore",
-        stdin: "ignore",
-        timeout: 3000,
-        // the live PATH — Bun.spawn resolves the binary against the PATH it
-        // cached at process start unless the env is passed fresh (same class
-        // as Bun.which: src/fs/which.ts passes { PATH } for this reason)
-        env: { ...process.env },
-      },
-    );
-    const out = (await new Response(proc.stdout).text()).trim();
-    await proc.exited;
-    if (/\bb\s+true\b/.test(out)) return true;
-    if (/\bb\s+false\b/.test(out)) return false;
-    return null;
+    const out = await run([
+      "busctl",
+      "--user",
+      "call",
+      "org.freedesktop.DBus",
+      "/org/freedesktop/DBus",
+      "org.freedesktop.DBus",
+      "NameHasOwner",
+      "s",
+      SERVICE_NAME,
+    ]);
+    if (/\bb\s+true\b/.test(out)) return { ok: true, owned: true };
+    if (/\bb\s+false\b/.test(out)) return { ok: true, owned: false };
+    return { ok: false, reason: "unavailable" };
   } catch {
-    return null;
+    return { ok: false, reason: "unavailable" };
   }
 };
 

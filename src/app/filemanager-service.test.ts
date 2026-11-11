@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { installFileManagerService, makeFileManagerService, SERVICE_NAME, SERVICE_PATH } from "./filemanager-service";
+import {
+  installFileManagerService,
+  makeFileManagerService,
+  probeNameOwned,
+  SERVICE_NAME,
+  SERVICE_PATH,
+} from "./filemanager-service";
 
 // Daemon contract (faked bus — no session bus needed): owns
 // org.freedesktop.FileManager1, routes ShowItems/ShowFolders into per-dir
@@ -222,6 +228,32 @@ describe("makeFileManagerService", () => {
       cb({ type: 4, member: "NameLost", body: ["org.example.Other"] });
     }
     expect(exits).toEqual([]);
+  });
+});
+
+describe("the name-ownership probe (an unknown is NOT a payload)", () => {
+  test("a true answer is an ANSWER: somebody owns the name", async () => {
+    expect(await probeNameOwned({ run: async () => "b true\n" })).toEqual({ ok: true, owned: true });
+  });
+
+  test("a false answer is an ANSWER: nobody owns the name", async () => {
+    expect(await probeNameOwned({ run: async () => "b false\n" })).toEqual({ ok: true, owned: false });
+  });
+
+  test("an answer we cannot read is NOT an answer", async () => {
+    // the old shape carried "couldn't ask" as a null INSIDE a boolean, so
+    // `false` (nobody owns it) and `null` (no answer) were both falsy
+    expect(await probeNameOwned({ run: async () => "garbage" })).toEqual({ ok: false, reason: "unavailable" });
+  });
+
+  test("a missing helper is NOT an answer", async () => {
+    expect(
+      await probeNameOwned({
+        run: async () => {
+          throw new Error("ENOENT");
+        },
+      }),
+    ).toEqual({ ok: false, reason: "unavailable" });
   });
 });
 

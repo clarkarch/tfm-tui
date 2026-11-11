@@ -220,6 +220,21 @@ describe("runUpdateCli", () => {
     });
     expect(await runUpdateCli(["--tag", "1.0.0"], h.deps)).toBe(0);
     expect(h.installs).toHaveLength(1);
+    // an UNKNOWN answer is never reported as "there is no release" — the
+    // installer runs and reports the missing tag in its own words
+    expect(h.err.join("\n")).not.toContain("no release");
+  });
+
+  test("the tag probe's UNKNOWN is never read as 'the release does not exist'", async () => {
+    const src = (await Bun.file(`${import.meta.dir}/update-cli.ts`).text())
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/\/\/[^\n]*/g, "");
+    // the old shape carried "couldn't ask" as a null INSIDE a boolean, so
+    // the whole safety of the --tag check lived in one `=== false`
+    // comparison — a new caller writing `if (!exists)` would turn "offline"
+    // into "there is no release v1.0.1"
+    expect(/exists === false/.test(src)).toBe(false);
+    expect(src.includes("releaseExists")).toBe(true);
   });
 
   test("a downgrade to an older published release is allowed", async () => {

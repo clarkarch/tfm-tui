@@ -16,6 +16,7 @@ import {
   fileManagerServiceFile,
   probeNameOwned,
   resolveServiceExec,
+  type NameOwned,
 } from "./filemanager-service";
 
 // --- `tfm default-filemanager <subcommand>`: headless default-handler
@@ -101,8 +102,9 @@ type DefaultFileManagerCliDeps = {
   writeService?: (file: string, content: string) => void;
   removeService?: (file: string) => void;
   serviceInstalled?: () => boolean;
-  // null = unknown (no busctl/bus); tests fake true/false
-  nameOwned?: () => Promise<boolean | null> | boolean | null;
+  // the name-ownership probe's answer (a record, never a nullable boolean:
+  // "nobody owns it" and "we couldn't ask" are both falsy in a boolean)
+  nameOwned?: () => Promise<NameOwned> | NameOwned;
 };
 
 // binary path for the service activator lives in filemanager-service
@@ -155,13 +157,24 @@ export const runDefaultFileManagerCli = async (
           svcInstalled = deps.serviceInstalled?.() ?? existsSync(deps.serviceFile?.() ?? fileManagerServiceFile());
         } catch {}
         out(svcInstalled ? "service file: installed" : "service file: missing (run service-install)");
-        let owned: boolean | null = null;
+        let owned: NameOwned = { ok: false, reason: "unavailable" };
         try {
-          owned = (await deps.nameOwned?.()) ?? (await probeNameOwned());
+          // the seam IS the probe when it is given (the tests fake it); the
+          // live busctl probe runs only when it is absent — the old `??`
+          // chain ran the REAL probe whenever the seam said "unknown", so a
+          // unit test could reach the machine's bus
+          owned = deps.nameOwned ? await deps.nameOwned() : await probeNameOwned();
         } catch {}
-        if (owned === true) out("name owned: yes — browsers reach the running owner");
-        else if (owned === false) out("name owned: no — the next show-in-folder cold-activates whoever answers first");
-        if (svcInstalled && owned === false) out("hint: quit the current owner (nautilus?) so tfm can hold the name");
+        if (owned.ok) {
+          if (owned.owned) out("name owned: yes — browsers reach the running owner");
+          else out("name owned: no — the next show-in-folder cold-activates whoever answers first");
+        } else {
+          // an unknown is a REAL state: say so instead of staying quiet
+          // (silence read as "nobody owns it" — the truth we cannot know)
+          out(`name owned: unknown — couldn't ask the user bus (${owned.reason})`);
+        }
+        if (svcInstalled && owned.ok && !owned.owned)
+          out("hint: quit the current owner (nautilus?) so tfm can hold the name");
         return 0;
       }
       case "set": {
