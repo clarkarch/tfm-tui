@@ -6,6 +6,7 @@ import {
   readFileSync,
   rmSync,
   renameSync,
+  statSync,
   symlinkSync,
   utimesSync,
   writeFileSync,
@@ -503,6 +504,108 @@ describe("makePluginStore", () => {
       writeFileSync(stateFile(dir, "hello"), JSON.stringify({ k: 2 }));
       utimesSync(stateFile(dir, "hello"), new Date(t), new Date(t));
       expect(store.get("k", 42)).toBe(2);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a failed stat after a write does not serve a stale cache", () => {
+    // The write's post-rename stat failed → the cached mtime still said
+    // "missing" (the old shape's -1 sentinel doubled as a timestamp) → a
+    // later DELETION of the state file was invisible and the stale cache
+    // was served.
+    const dir = mkDir();
+    try {
+      let statFails = false;
+      const store = makePluginStore(dir, "hello", {
+        stat: (f) => {
+          if (statFails) throw Object.assign(new Error("stat-boom"), { code: "EIO" });
+          return statSync(f).mtimeMs;
+        },
+      });
+      // the file does not exist yet — the cached mtime is the "missing" marker
+      expect(store.get("k", 42)).toBe(42);
+      // a write whose post-rename stat fails
+      statFails = true;
+      store.set("k", 1);
+      expect(JSON.parse(readFileSync(stateFile(dir, "hello"), "utf8"))).toEqual({ k: 1 });
+      statFails = false;
+      // the state file is gone → the store must reset, not serve the stale cache
+      rmSync(stateFile(dir, "hello"));
+      expect(store.get("k", 42)).toBe(42);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a stat failure does not wipe the cached state", () => {
+    // The old shape read a failed stat as "missing" and replaced the cache
+    // with {} — the next write then persisted a TRUNCATED state (every other
+    // key was lost).
+    const dir = mkDir();
+    try {
+      let statFails = false;
+      const store = makePluginStore(dir, "hello", {
+        stat: (f) => {
+          if (statFails) throw Object.assign(new Error("stat-boom"), { code: "EIO" });
+          return statSync(f).mtimeMs;
+        },
+      });
+      store.set("a", 1);
+      statFails = true;
+      store.set("b", 2);
+      statFails = false;
+      expect(JSON.parse(readFileSync(stateFile(dir, "hello"), "utf8"))).toEqual({ a: 1, b: 2 });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a store whose first probe fails refuses to write (a silent truncation is worse)", () => {
+    // We do not know what the file holds, so persisting a view of it would
+    // TRUNCATE it. The old shape read the failed probe as "missing" and
+    // wrote an empty state over the file.
+    const dir = mkDir();
+    try {
+      const store = makePluginStore(dir, "hello", {
+        stat: () => {
+          throw Object.assign(new Error("stat-boom"), { code: "EIO" });
+        },
+      });
+      // the read degrades to the fallback …
+      expect(store.get("k", 42)).toBe(42);
+      // … and the write refuses instead of truncating (the refusal is
+      // DELIBERATE — a legible error, not an incidental crash)
+      expect(() => store.set("k", 1)).toThrow(/unreadable/);
+      expect(existsSync(stateFile(dir, "hello"))).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a write whose post-write probe failed keeps what it wrote", () => {
+    // The write landed; only the STAMP is unknown. The store must not
+    // forget what it wrote: the contents are ours, so a read serves them.
+    // (The old shape kept a stamp it never learned — the "-1 missing"
+    // sentinel — and the next read served a cache that no longer matched
+    // the file.)
+    const dir = mkDir();
+    try {
+      let statFails = false;
+      const store = makePluginStore(dir, "hello", {
+        stat: (f) => {
+          if (statFails) throw Object.assign(new Error("stat-boom"), { code: "EIO" });
+          return statSync(f).mtimeMs;
+        },
+      });
+      store.set("a", 1);
+      // now every probe fails — the write lands, the stamp does not
+      statFails = true;
+      store.set("b", 2);
+      expect(JSON.parse(readFileSync(stateFile(dir, "hello"), "utf8"))).toEqual({ a: 1, b: 2 });
+      // the contents are ours even though the stamp is unknown
+      expect(store.get("a", 0)).toBe(1);
+      expect(store.get("b", 0)).toBe(2);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

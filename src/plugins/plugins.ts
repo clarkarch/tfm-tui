@@ -31,6 +31,7 @@ import {
 import os from "node:os";
 import path from "node:path";
 import { withTimeout, errMessage } from "../lib/uiutil";
+import { errCode } from "../fs/fsutil";
 import { validateKeybindSpec } from "../config/keyspec";
 import {
   PLUGIN_API_VERSION,
@@ -228,37 +229,80 @@ const readState = (file: string): Record<string, unknown> => {
   return {};
 };
 
+// The store's cache — ONE tagged record. The old shape encoded three phases
+// as a NUMBER that was otherwise a timestamp (-2 = never read, -1 = missing,
+// else the file's mtime) plus a parallel `cache === null` flag for the same
+// "unloaded" phase: the two could disagree, and a FAILED probe was read as
+// "missing" — the same fact as a deleted file. Two live bugs came out of
+// that: a failed probe replaced the cache with {} (the next write persisted
+// a TRUNCATED state — every other key was lost), and a write whose
+// post-rename probe failed left the cached mtime saying "missing" (a later
+// deletion was invisible and the stale cache was served).
+//
+// The phases are about WHAT WE KNOW:
+//   unread  — nothing established (never probed, or the probe failed)
+//   missing — the file is gone (ENOENT); the data is a fresh empty view
+//   loaded  — the contents were read at mtime M (fresh for that stamp)
+//   written — the contents are OURS (we just wrote them) but the stamp is
+//             unknown (the post-write probe failed) → the next successful
+//             probe re-reads the file
+// The "missing"/"written" arms carry the data because the write path
+// MUTATES the object the read returns (a missing file still has a pending
+// view).
+type StoreState =
+  | { kind: "unread" }
+  | { kind: "missing"; data: Record<string, unknown> }
+  | { kind: "loaded"; mtime: number; data: Record<string, unknown> }
+  | { kind: "written"; data: Record<string, unknown> };
+
 // synchronous store (see ./plugin-api): loads once, writes through
 // atomically, and re-reads whenever the file's mtime moves under it — a
 // deleted or externally rewritten state.json reflects immediately.
-export const makePluginStore = (dir: string, name: string): PluginStore => {
+// `opts.stat` is the mtime probe (injectable so the cache's failure paths
+// are testable: a probe that FAILS is not the same fact as a file that is
+// gone).
+export const makePluginStore = (dir: string, name: string, opts?: { stat?: (file: string) => number }): PluginStore => {
   const file = statePath(dir, name); // validates eagerly
   migrateState(dir, name);
-  // mtime of the last read; -1 = missing (deleted), -2 = never read
-  let cache: Record<string, unknown> | null = null;
-  let cacheMtime = -2;
+  const statFile = opts?.stat ?? ((f: string) => statSync(f).mtimeMs);
+  let state: StoreState = { kind: "unread" };
   let tmpSeq = 0;
-  const load = (): Record<string, unknown> => {
-    let mtime: number;
+  // the state file's mtime — THREE outcomes, not two: "present", "missing"
+  // (ENOENT — the file is gone) and "unknown" (the probe ITSELF failed).
+  const probe = (): { kind: "present"; mtime: number } | { kind: "missing" } | { kind: "unknown" } => {
     try {
-      mtime = statSync(file).mtimeMs;
-    } catch {
-      mtime = -1;
+      return { kind: "present", mtime: statFile(file) };
+    } catch (err) {
+      return errCode(err) === "ENOENT" ? { kind: "missing" } : { kind: "unknown" };
     }
-    if (cache === null || mtime !== cacheMtime) {
-      cache = mtime === -1 ? {} : readState(file);
-      cacheMtime = mtime;
-    }
-    return cache;
   };
-  const persist = (): void => {
+  const load = (): StoreState => {
+    const p = probe();
+    if (p.kind === "unknown") {
+      // a failed probe is NOT "missing": keep what we know. An unread store
+      // stays unread — a later successful probe re-reads the file.
+      return state;
+    }
+    if (p.kind === "missing") {
+      // the file is GONE: whatever we cached is void — the stale view must
+      // not survive (the old shape's "the mtime did not move, so the cache
+      // is fresh" reading served the deleted file's contents).
+      state = { kind: "missing", data: {} };
+      return state;
+    }
+    // the file is there: the cached stamp decides whether the data is fresh
+    if (state.kind === "loaded" && state.mtime === p.mtime) return state;
+    state = { kind: "loaded", mtime: p.mtime, data: readState(file) };
+    return state;
+  };
+  const persist = (data: Record<string, unknown>): void => {
     mkdirSync(path.dirname(file), { recursive: true });
     // unique tmp per write (a fixed pid-named tmp lets two tfm instances
     // interleave bytes into one torn file) + fsync before rename, or a crash
     // lands the torn tmp as the live state. Still matches state.json.* so the
     // hash/fingerprint passes skip it.
     const tmp = `${file}.${process.pid}.${tmpSeq++}.tmp`;
-    writeFileSync(tmp, JSON.stringify(cache, null, 2));
+    writeFileSync(tmp, JSON.stringify(data, null, 2));
     const fd = openSync(tmp, "r");
     try {
       fsyncSync(fd);
@@ -266,18 +310,32 @@ export const makePluginStore = (dir: string, name: string): PluginStore => {
       closeSync(fd);
     }
     renameSync(tmp, file);
+    // the write landed: adopt the new stamp. A failed probe leaves the state
+    // "written" — the contents are ours, but the stamp is unknown (NEVER
+    // "missing": that was the bug — the cached stamp said "missing", so a
+    // later deletion was invisible and the stale cache was served).
     try {
-      cacheMtime = statSync(file).mtimeMs;
-    } catch {}
+      state = { kind: "loaded", mtime: statFile(file), data };
+    } catch {
+      state = { kind: "written", data };
+    }
   };
   return {
     get: <T>(key: string, fallback: T): T => {
-      const v: unknown = load()[key];
+      const s = load();
+      const v = s.kind === "unread" ? undefined : s.data[key];
       return (v === undefined ? fallback : v) as T;
     },
     set: (key: string, value: unknown): void => {
-      load()[key] = value;
-      persist();
+      const s = load();
+      if (s.kind === "unread") {
+        // we could not establish the file's contents (the probe failed) —
+        // persisting now would TRUNCATE it. The old shape read the failed
+        // probe as "missing" and wrote an empty state over the file.
+        throw new Error(`plugin state unreadable: ${file}`);
+      }
+      s.data[key] = value;
+      persist(s.data);
     },
   };
 };
