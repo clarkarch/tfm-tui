@@ -4,6 +4,7 @@
 
 import { CliRenderEvents, Renderable } from "@opentui/core";
 import { runBoot } from "../app/boot";
+import { makeBootReveal } from "../app/boot-reveal";
 import { consumeRestartFlag } from "../app/restart";
 import { buildBootLayout } from "../ui/ui-boot-layout";
 import { hookScrollerScroll } from "../ui/ui-grid";
@@ -247,21 +248,6 @@ export const runBootRender = async (ctx: BootRenderCtx): Promise<void> => {
   }
 };
 
-// The reveal (the burst startup): the app becomes visible in ONE frame. The
-// renderer's clear color goes back to tfm's bg FIRST (it matched the
-// TERMINAL's bg during the boot, so the intermediate frame was invisible)
-// and the content's opacity follows — both writes land in the same tick, so
-// the app appears with its bg AND its widgets in one go.
-export type BootRevealCtx = {
-  restoreBackgroundColor(): void;
-  setBootHidden(hidden: boolean): void;
-};
-
-export const runBootReveal = (ctx: BootRevealCtx): void => {
-  ctx.restoreBackgroundColor();
-  ctx.setBootHidden(false);
-};
-
 // --- Boot sequence (order + toast gating live in ./boot, tested): resolution
 // wait, fixed nodes, globs2, session restore, places, first render, hygiene,
 // search wiring. Fire-and-forget, exactly like the old flat wiring. ---
@@ -317,6 +303,16 @@ export const wireBoot = (deps: {
   // captured the config field a second time here, with the opposite
   // polarity to the core's capture.
   const mode = core.bootMode;
+  // The reveal's OWNER (src/app/boot-reveal.ts): it performs the two writes
+  // and records what the reveal MEANT — the app appeared complete, or it
+  // appeared while the paint was still building (the boot's budget expiry).
+  // The pending count is the render's LIVE count, read at the reveal.
+  const bootReveal = makeBootReveal({
+    restoreBackgroundColor: () => chrome.restoreBackgroundColor(),
+    setBootHidden: (hidden) => core.setBootHidden(hidden),
+    pendingRenderSteps: () => nav.renderAllPending(),
+    log: (msg) => debugLog(msg),
+  });
   const mountsCtx: BootMountsCtx = {
     mode,
     loadAll: () => loadSystemPlaces(),
@@ -421,12 +417,11 @@ export const wireBoot = (deps: {
     playSidebarIntro: () => deps.playSidebarIntro?.(),
     playTopbarIntro: () => deps.playTopbarIntro?.(),
     // the app content is transparent until the first frame is COMPLETE (the
-    // burst startup) — this is the one write that makes it visible
-    revealApp: () =>
-      runBootReveal({
-        restoreBackgroundColor: () => chrome.restoreBackgroundColor(),
-        setBootHidden: (hidden) => core.setBootHidden(hidden),
-      }),
+    // burst startup) — this is the one write that makes it visible. The
+    // reveal OWNS its state (src/app/boot-reveal.ts): the app may appear
+    // complete or half-built (the boot's budget expiry), and that is a
+    // recorded fact, not a silent outcome.
+    revealApp: () => bootReveal.reveal(),
     promptDefaultFileManager: () => deps.promptDefaultFileManager?.(),
     checkUpdates: () => deps.checkUpdates?.(),
     // the boot's MODE — the one value every boot consumer reads

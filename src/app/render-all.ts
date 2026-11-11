@@ -36,8 +36,13 @@ export type RenderStepName = (typeof RENDER_STEP_ORDER)[number];
 // grid build lists the folder and re-rasterizes the tiles), so a caller that
 // needs the paint to be COMPLETE — the boot, which reveals the app in one
 // burst — must be able to await the async tail.
+//
+// `pending()` is the SAME fact as a number: how many async steps are still
+// in flight. The boot's reveal reads it to say whether the app appeared
+// complete or half-built (the boot's budget gives up on a hung listing).
 export type RenderAll = (() => void) & {
   settled(): Promise<void>;
+  pending(): number;
 };
 
 export type RenderAllCtx = {
@@ -95,5 +100,8 @@ export const makeRenderAll = (ctx: RenderAllCtx): RenderAll => {
       await Promise.all([...inflight]);
     }
   };
+  // the live count of the async steps in flight — the boot's reveal reads it
+  // to say whether the app appeared COMPLETE or still building
+  renderAll.pending = (): number => inflight.size;
   return renderAll;
 };

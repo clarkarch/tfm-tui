@@ -5,7 +5,7 @@
 // title + background first, then the sidebar, then the grid, then the icons.
 // The seam takes injected fakes — no renderer, no fs. ---
 import { describe, expect, test } from "bun:test";
-import { runBootRender, runBootReveal, type BootRenderCtx } from "./io";
+import { runBootRender, type BootRenderCtx } from "./io";
 
 const harness = (over: Partial<{ gridDelayMs: number; drainDelayMs: number; burst: boolean }> = {}) => {
   const calls: string[] = [];
@@ -111,19 +111,20 @@ describe("runBootRender", () => {
     await runBootRender(ctx);
     expect(logs.some((l) => l.includes("node gone"))).toBe(true);
   });
-});
 
-describe("runBootReveal", () => {
-  test("the clear color is restored BEFORE the content is shown (one frame)", () => {
-    // The app must appear with its bg AND its widgets in ONE frame: the
-    // renderer's clear color goes back to tfm's bg first, then the content's
-    // opacity flips. The other order would paint the app over the terminal's
-    // bg for a frame.
-    const calls: string[] = [];
-    runBootReveal({
-      restoreBackgroundColor: () => calls.push("bg"),
-      setBootHidden: (hidden) => calls.push(`hidden:${hidden}`),
-    });
-    expect(calls).toEqual(["bg", "hidden:false"]);
+  test("the reveal's state is wired to the render's LIVE pending count", async () => {
+    // the reveal says "the app appeared complete" only because it reads the
+    // render's pending count — a wiring that passed a constant 0 would
+    // report every reveal as complete, and the budget expiry (the whole
+    // point of the state) would be invisible
+    const io = (await Bun.file(`${import.meta.dir}/io.ts`).text())
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/\/\/[^\n]*/g, "");
+    const nav = (await Bun.file(`${import.meta.dir}/nav.ts`).text())
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/\/\/[^\n]*/g, "");
+    expect(io.includes("makeBootReveal")).toBe(true);
+    expect(io.includes("pendingRenderSteps: () => nav.renderAllPending()")).toBe(true);
+    expect(nav.includes("renderAllPending: () => renderAll.pending()")).toBe(true);
   });
 });

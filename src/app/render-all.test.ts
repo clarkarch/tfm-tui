@@ -194,6 +194,34 @@ describe("makeRenderAll", () => {
     expect(logs.some((l) => l.includes("late kaboom"))).toBe(true);
   });
 
+  test("the pending count follows the async steps in flight (the reveal reads it)", async () => {
+    // The reveal asks "is the paint still building?" — the count is the FACT
+    // it reads. It must be 0 before a render, > 0 while an async step is in
+    // flight, and 0 again once the paint settles (the boot's budget expiry
+    // is exactly the case where the reveal reads a non-zero count).
+    let release = (): void => {};
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const renderAll = makeRenderAll({
+      state: mkState("/a"),
+      syncTabFromState: () => {},
+      scheduleSaveSession: () => {},
+      log: () => {},
+      steps: {
+        grid: async () => {
+          await gate;
+        },
+      },
+    });
+    expect(renderAll.pending()).toBe(0);
+    renderAll();
+    expect(renderAll.pending()).toBe(1);
+    release();
+    await renderAll.settled();
+    expect(renderAll.pending()).toBe(0);
+  });
+
   test("an async step rejection is logged without blocking the sync tail", async () => {
     const logs: string[] = [];
     let resolved = false;

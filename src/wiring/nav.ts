@@ -284,6 +284,9 @@ export const wireNav = (deps: {
     renderAll,
     // the boot's "wait for the first paint to be COMPLETE" seam
     renderAllSettled: () => renderAll.settled(),
+    // the render's async steps still in flight — the boot's reveal reads it
+    // to say whether the app appeared complete or half-built
+    renderAllPending: () => renderAll.pending(),
     // the ONE teardown lifecycle — the signal handler and the renderer-closed
     // fallback read it so "the app is shutting down" has a single owner
     teardown,

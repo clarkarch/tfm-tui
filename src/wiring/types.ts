@@ -47,6 +47,9 @@ export type NavWiring = {
   // the boot waits for the async render steps (the grid build) so the first
   // painted frame is the COMPLETE app
   renderAllSettled: () => Promise<void>;
+  // the render's async steps still in flight (0 = the paint settled) — the
+  // boot's reveal reads it to record whether the app appeared complete
+  renderAllPending: () => number;
   // the ONE teardown lifecycle (live -> tearing-down -> exited) — quit,
   // force-quit, restart, the signal handler and the renderer-closed
   // fallback all compare-and-swap on it
