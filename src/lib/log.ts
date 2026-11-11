@@ -87,10 +87,22 @@ export const dlog = (msg: string): void => {
 // uncaughtException in one test file could exit the whole suite instead of
 // failing one test.
 //
-// installCrashHandlers() is called once, from src/index.ts, before the app
-// graph loads. Nothing else may call it (a second registration would double
-// every crash report).
+// installCrashHandlers() is called from src/index.ts, before the app graph
+// loads. It is ONCE-ONLY, and that is STATE, not prose: the old comment
+// said "nothing else may call it (a second registration would double every
+// crash report)" while nothing enforced it — a second call
+// DOUBLE-REGISTERED both handlers, so every UNHANDLED REJECTION was
+// reported twice (two log lines, two stderr notes; the crash path's
+// process.exit ends the run before the second listener is reached).
+//
+// The record is a FACT about the registrations: it is written once both
+// handlers are in place, and it is the guard that makes the second call a
+// no-op.
+type CrashHandlerState = { kind: "uninstalled" } | { kind: "installed" };
+let crashHandlerState: CrashHandlerState = { kind: "uninstalled" };
+
 export const installCrashHandlers = (): void => {
+  if (crashHandlerState.kind === "installed") return;
   process.on("uncaughtException", (err) => {
     appendLog(`UNCAUGHT EXCEPTION: ${err?.stack ?? err}`);
     try {
@@ -107,4 +119,5 @@ export const installCrashHandlers = (): void => {
       process.stderr.write(`[tfm] unhandled rejection — see ${DEBUG_LOG}\n`);
     } catch {}
   });
+  crashHandlerState = { kind: "installed" };
 };

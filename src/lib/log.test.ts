@@ -21,6 +21,12 @@ if (process.argv[2] === "paths") {
   l.installCrashHandlers();
   const after = process.listenerCount("uncaughtException") + process.listenerCount("unhandledRejection");
   process.stdout.write(JSON.stringify({ before, after }));
+} else if (process.argv[2] === "handlers-twice") {
+  const before = process.listenerCount("uncaughtException") + process.listenerCount("unhandledRejection");
+  l.installCrashHandlers();
+  l.installCrashHandlers();
+  const after = process.listenerCount("uncaughtException") + process.listenerCount("unhandledRejection");
+  process.stdout.write(JSON.stringify({ before, after }));
 } else {
   l.appendLog("first");
   l.appendLog("second");
@@ -127,6 +133,18 @@ describe("crash handlers", () => {
 
   test("installCrashHandlers() registers both handlers", () => {
     const p = JSON.parse(run("handlers-install", "handlers", []).text);
+    expect(p.after).toBe(2);
+  });
+
+  test("installCrashHandlers() is ONCE-ONLY — a second call registers no more handlers", () => {
+    // The once-only rule used to be PROSE ("installCrashHandlers() is called
+    // once, from src/index.ts; nothing else may call it") with NO state to
+    // enforce it: a second call DOUBLE-REGISTERED both handlers, so every
+    // unhandled rejection was reported twice (two log lines, two stderr
+    // notes).
+    const p = JSON.parse(run("handlers-twice", "handlers-twice", []).text);
+    expect(p.before).toBe(0);
+    // the same TWO handlers, not four
     expect(p.after).toBe(2);
   });
 });
