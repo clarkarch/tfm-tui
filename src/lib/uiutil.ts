@@ -4,6 +4,8 @@
 // inverted the layering (fs -> ui for a 3-line debounce). All import sites
 // were rewritten; there is no re-export shim. ---
 
+import type { ListEntry } from "./menu-entry";
+
 type ChildHost = { getChildren: () => Iterable<unknown>; remove: (child: unknown) => void };
 
 const isChildHost = (v: unknown): v is ChildHost =>
@@ -242,11 +244,15 @@ export const flyoutCursor = (flyout: FlyoutCursor): Cursor => (flyout.kind === "
 // wraps. `entries` given means separators are skipped, bounded so an
 // all-separator list can't spin. An EMPTY list yields NO cursor — it can
 // never point at a row.
-export const advanceCursor = (cursor: Cursor, delta: number, count: number, entries?: { sep?: boolean }[]): Cursor => {
+//
+// The entries are the menu's tagged rows: a separator is the GAP between
+// groups (its kind says so — the old shape spelled it as a `sep` flag that
+// this helper had to know about).
+export const advanceCursor = (cursor: Cursor, delta: number, count: number, entries?: readonly ListEntry[]): Cursor => {
   if (count <= 0) return NO_CURSOR;
   const from = cursorIndex(cursor);
   let i = from < 0 ? (delta >= 0 ? 0 : count - 1) : (from + delta + count) % count;
-  for (let n = 0; entries?.[i]?.sep && n < count; n++) i = (i + delta + count) % count;
+  for (let n = 0; entries?.[i]?.kind === "sep" && n < count; n++) i = (i + delta + count) % count;
   return { kind: "row", index: i };
 };
 

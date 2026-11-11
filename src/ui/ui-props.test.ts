@@ -377,10 +377,10 @@ describe("single-file properties", () => {
     expect(labels.some((l) => l!.includes("read-only"))).toBe(true);
     expect(labels.some((l) => l!.includes("none"))).toBe(true);
 
-    contextMenus[0]!.entries.find((e) => e.label!.includes("none"))!.action();
+    contextMenus[0]!.entries.find((e) => e.label?.includes("none"))?.action?.();
     await settle(() => text("tfm-props-perm-owner-words") === "no access");
     // restore
-    contextMenus[0]!.entries.find((e) => e.label!.includes("read & write"))!.action();
+    contextMenus[0]!.entries.find((e) => e.label?.includes("read & write"))?.action?.();
     await settle(() => text("tfm-props-perm-owner-words") === "read, write");
     props.closeProps();
     await t.renderOnce();

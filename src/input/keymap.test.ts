@@ -146,7 +146,9 @@ const makeHarness = (over: Partial<KeyRouterCtx> | ((calls: string[]) => Partial
     // cursor move — the menu's own methods are pinned in ui-menu.test.ts.
     openFileSubmenu: () => {
       const st = ctx.getFileMenuState();
-      const subs = st ? st.entries[cursorIndex(st.cursor)]?.submenu : undefined;
+      // only a FLYOUT row opens a flyout (the kind says so)
+      const row = st ? st.entries[cursorIndex(st.cursor)] : undefined;
+      const subs = row?.kind === "flyout" ? row.submenu : undefined;
       if (!subs?.length) return; // only a parent row opens a flyout
       if (st?.flyout.kind === "open") return; // already open — keep its cursor
       if (st) st.flyout = openFlyout();
@@ -161,7 +163,8 @@ const makeHarness = (over: Partial<KeyRouterCtx> | ((calls: string[]) => Partial
     moveFileSubmenu: (d) => {
       const st = ctx.getFileMenuState();
       if (st?.flyout.kind !== "open") return;
-      const items = st.entries[cursorIndex(st.cursor)]?.submenu ?? [];
+      const row = st.entries[cursorIndex(st.cursor)];
+      const items = row?.kind === "flyout" ? row.submenu : [];
       if (!items.length) return;
       st.flyout = openFlyout(advanceCursor(st.flyout.cursor, d, items.length, items));
       calls.push("fmenu:sub-move");
@@ -184,7 +187,9 @@ const makeHarness = (over: Partial<KeyRouterCtx> | ((calls: string[]) => Partial
       }
       const at = cursorIndex(st.cursor);
       if (at < 0) return; // no cursor yet: enter is a no-op
-      st.entries[at]?.action();
+      const row = st.entries[at];
+      // a separator is a GAP: it has no action
+      if (row && row.kind !== "sep") row.action();
     },
     nextTab: rec("tab:next"),
     prevTab: rec("tab:prev"),
@@ -560,7 +565,10 @@ describe("palette / keypress surface agreement", () => {
     const mk = () => ({
       cursor: NO_CURSOR,
       flyout: CLOSED_FLYOUT,
-      entries: [{ action: () => {} }, { action: () => {} }],
+      entries: [
+        { kind: "item" as const, label: "row", action: () => {} },
+        { kind: "item" as const, label: "row", action: () => {} },
+      ],
     });
     const f1 = mk();
     const h = makeHarness({ getFileMenuState: () => f1 });
@@ -662,9 +670,9 @@ describe("file menu keys", () => {
       cursor: cursorAt(0),
       flyout: CLOSED_FLYOUT,
       entries: [
-        { action: () => calls.push("act:A") },
-        { sep: true, action: () => {} },
-        { action: () => calls.push("act:B") },
+        { kind: "item" as const, label: "act:A", action: () => calls.push("act:A") },
+        { kind: "sep" as const },
+        { kind: "item" as const, label: "act:B", action: () => calls.push("act:B") },
       ],
     };
     const h = makeHarness({ getFileMenuState: () => fmenu });
@@ -681,7 +689,11 @@ describe("file menu keys", () => {
 
   test("escape closes the menu", () => {
     const h = makeHarness({
-      getFileMenuState: () => ({ cursor: cursorAt(0), flyout: CLOSED_FLYOUT, entries: [{ action: () => {} }] }),
+      getFileMenuState: () => ({
+        cursor: cursorAt(0),
+        flyout: CLOSED_FLYOUT,
+        entries: [{ kind: "item" as const, label: "row", action: () => {} }],
+      }),
     });
     h.key("escape");
     expect(h.calls).toEqual(["fmenu:close"]);
@@ -691,9 +703,20 @@ describe("file menu keys", () => {
     const parent = {
       cursor: cursorAt(0),
       flyout: CLOSED_FLYOUT,
-      entries: [{ action: () => {}, submenu: [{ action: () => {} }] }],
+      entries: [
+        {
+          kind: "flyout" as const,
+          label: "parent",
+          action: () => {},
+          submenu: [{ kind: "item" as const, label: "sub", action: () => {} }],
+        },
+      ],
     };
-    const leaf = { cursor: cursorAt(0), flyout: CLOSED_FLYOUT, entries: [{ action: () => {} }] };
+    const leaf = {
+      cursor: cursorAt(0),
+      flyout: CLOSED_FLYOUT,
+      entries: [{ kind: "item" as const, label: "row", action: () => {} }],
+    };
     const h1 = makeHarness({ getFileMenuState: () => parent });
     h1.key("right");
     expect(h1.calls).toContain("fmenu:sub-open");
@@ -706,7 +729,14 @@ describe("file menu keys", () => {
     const open = {
       cursor: cursorAt(0),
       flyout: openFlyout(cursorAt(1)),
-      entries: [{ action: () => {}, submenu: [{ action: () => {} }] }],
+      entries: [
+        {
+          kind: "flyout" as const,
+          label: "parent",
+          action: () => {},
+          submenu: [{ kind: "item" as const, label: "sub", action: () => {} }],
+        },
+      ],
     };
     const h = makeHarness({ getFileMenuState: () => open });
     h.key("down");
@@ -730,7 +760,14 @@ describe("file menu keys", () => {
     const fmenu = {
       cursor: cursorAt(0),
       flyout: CLOSED_FLYOUT,
-      entries: [{ action: () => calls.push("parent"), submenu: [{ action: () => {} }] }],
+      entries: [
+        {
+          kind: "flyout" as const,
+          label: "parent",
+          action: () => calls.push("parent"),
+          submenu: [{ kind: "item" as const, label: "sub", action: () => {} }],
+        },
+      ],
     };
     const h = makeHarness({ getFileMenuState: () => fmenu });
     h.key("return");
@@ -743,7 +780,14 @@ describe("file menu keys", () => {
   // for the mouse path's state, free to drift. The router asks instead.
   test("the router asks the MENU to move — it never writes the menu's state", () => {
     const asked: number[] = [];
-    const fmenu = { cursor: cursorAt(0), flyout: CLOSED_FLYOUT, entries: [{ action: () => {} }, { action: () => {} }] };
+    const fmenu = {
+      cursor: cursorAt(0),
+      flyout: CLOSED_FLYOUT,
+      entries: [
+        { kind: "item" as const, label: "row", action: () => {} },
+        { kind: "item" as const, label: "row", action: () => {} },
+      ],
+    };
     const h = makeHarness({
       getFileMenuState: () => fmenu,
       moveFileMenu: (d: number) => asked.push(d),
@@ -757,7 +801,11 @@ describe("file menu keys", () => {
   test("the router asks the MENU to activate — it never fires the entry itself", () => {
     const asked: string[] = [];
     const fired: string[] = [];
-    const fmenu = { cursor: cursorAt(0), flyout: CLOSED_FLYOUT, entries: [{ action: () => fired.push("act") }] };
+    const fmenu = {
+      cursor: cursorAt(0),
+      flyout: CLOSED_FLYOUT,
+      entries: [{ kind: "item" as const, label: "act", action: () => fired.push("act") }],
+    };
     const h = makeHarness({
       getFileMenuState: () => fmenu,
       activateFileMenu: () => asked.push("activate"),
@@ -1554,7 +1602,11 @@ describe("file menu with no initial cursor", () => {
     const fmenu = {
       cursor: NO_CURSOR,
       flyout: CLOSED_FLYOUT,
-      entries: [{ action: () => calls.push("a") }, { sep: true, action: () => {} }, { action: () => calls.push("b") }],
+      entries: [
+        { kind: "item" as const, label: "a", action: () => calls.push("a") },
+        { kind: "sep" as const },
+        { kind: "item" as const, label: "b", action: () => calls.push("b") },
+      ],
     };
     const h = makeHarness({ getFileMenuState: () => fmenu });
     h.key("return"); // no cursor -> nothing runs
@@ -1597,7 +1649,10 @@ describe("remappable grid + menu nav", () => {
     const fmenu = {
       cursor: cursorAt(0),
       flyout: CLOSED_FLYOUT,
-      entries: [{ action: () => {} }, { action: () => {} }],
+      entries: [
+        { kind: "item" as const, label: "row", action: () => {} },
+        { kind: "item" as const, label: "row", action: () => {} },
+      ],
     };
     const h = makeHarness({ getFileMenuState: () => fmenu });
     h.binds.moveDown = ["ctrl+n"];

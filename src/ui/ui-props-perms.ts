@@ -107,6 +107,7 @@ export const mountPermsEditor = (ctx: PermsCtx, deps: PermsDeps): void => {
   const permClassMenu = (shift: number): ListEntry[] => {
     const cur = (mode >> shift) & 7;
     const mk = (bits: number, label: string): ListEntry => ({
+      kind: "item",
       label: `${cur === bits ? "●" : "○"} ${label}`,
       action: () => {
         ctx.closeFileMenu();

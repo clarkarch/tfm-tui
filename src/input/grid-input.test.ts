@@ -140,7 +140,7 @@ const makeCtx = (): GridInputCtx & {
     openContextMenu: (_x, _y, _t, entries) => {
       menus.push(entries[0]?.label ?? "");
     },
-    fileEntriesFor: (key) => [{ label: `menu-${key}`, action: () => {} }],
+    fileEntriesFor: (key) => [{ kind: "item", label: `menu-${key}`, action: () => {} }],
     closeFileMenu: () => {},
     renameEditKey: () => null,
     finishInlineRename: () => {},

@@ -26,6 +26,7 @@ import type { SortMode } from "../lib/sort";
 import type { Command } from "../lib/command";
 import { cursorAt, invokeIsolated, NO_CURSOR, type Cursor, type FlyoutCursor } from "../lib/uiutil";
 import type { NotifyLevel } from "../lib/notify-level";
+import type { ListEntry } from "../lib/menu-entry";
 import { EDITOR_FLOAT_KINDS, type EditorFloatKind } from "../lib/float-kind";
 import { resolveSurface, surfaceBelow, type KeySurface, type SurfaceReaders } from "./key-surface";
 import type { Selection } from "./selection";
@@ -143,11 +144,10 @@ export type KeyRouterCtx = {
   getFileMenuState(): {
     cursor: Cursor;
     flyout: FlyoutCursor;
-    entries: Array<{
-      sep?: boolean;
-      submenu?: Array<{ sep?: boolean; action(): void }>;
-      action(): void;
-    }>;
+    // the menu's OWN rows — the tagged kind says what a row is (a gap, a
+    // row with an action, a row with a flyout), so the router never has to
+    // guess from parallel flags.
+    entries: ListEntry[];
   } | null;
   closeFileMenu(): void;
   moveFileMenu(delta: number): void;

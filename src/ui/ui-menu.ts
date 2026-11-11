@@ -16,7 +16,7 @@ import { FLOAT_Z, type FloatOpenOpts, type Floats } from "./floats";
 import type { MaybeNode } from "../lib/node-like";
 import type { PointerStyle } from "../lib/pointer";
 import type { MakeIconSlot } from "./ui-slots";
-import type { ListEntry } from "../lib/menu-entry";
+import { isActionEntry, type ListEntry } from "../lib/menu-entry";
 import { ActiveIdx } from "../lib/icon-state";
 
 // --- Floating menu widget: right-click context menu + the file-menu panel row
@@ -83,13 +83,18 @@ export const makeMenu = (ctx: MenuCtx) => {
     ctx.setPointer?.("default");
   };
 
-  const subEntries = (): ListEntry[] | null =>
-    state && state.flyout.kind === "open" ? (state.entries[cursorIndex(state.cursor)]?.submenu ?? null) : null;
+  // the flyout's rows — only a FLYOUT row has them (the kind says so; the
+  // old shape spelled it as an optional `submenu` on every row)
+  const subEntries = (): ListEntry[] | null => {
+    if (state?.flyout.kind !== "open") return null;
+    const row = state.entries[cursorIndex(state.cursor)];
+    return row?.kind === "flyout" ? row.submenu : null;
+  };
 
   // shared row builder for the main panel and its flyout
   const rowNode = (entry: ListEntry, active: boolean, onHover: () => void, onActivate: () => void) => {
     const colors = ctx.colors();
-    if (entry.sep) return Box({ width: "100%", height: 1 });
+    if (entry.kind === "sep") return Box({ width: "100%", height: 1 });
     return Box(
       {
         width: "100%",
@@ -122,7 +127,7 @@ export const makeMenu = (ctx: MenuCtx) => {
         : []),
       Text({ content: entry.label, fg: colors.white }),
       Box({ flexGrow: 1 }),
-      ...(entry.submenu
+      ...(entry.kind === "flyout"
         ? [
             ctx.makeIconSlot(
               "chevron-right",
@@ -209,7 +214,7 @@ export const makeMenu = (ctx: MenuCtx) => {
           },
           () => {
             const it = items[i];
-            if (it && !it.sep) it.action();
+            if (it && isActionEntry(it)) it.action();
           },
         ),
       );
@@ -244,15 +249,16 @@ export const makeMenu = (ctx: MenuCtx) => {
               state.cursor = cursorAt(i);
               // hovering a parent row opens ITS flyout (no row highlighted
               // yet); hovering a leaf closes whatever flyout was open
-              state.flyout = e.submenu ? openFlyout() : CLOSED_FLYOUT;
+              state.flyout = e.kind === "flyout" ? openFlyout() : CLOSED_FLYOUT;
               renderFileMenu();
             }
           },
           () => {
             if (!state) return;
             // a parent row's action is directly clickable (hover / → still
-            // open the flyout for the variants) — a click fires it
-            e.action();
+            // open the flyout for the variants) — a click fires it. A
+            // separator is a GAP: it has no action (the kind says so).
+            if (isActionEntry(e)) e.action();
           },
         ),
       );
@@ -275,7 +281,8 @@ export const makeMenu = (ctx: MenuCtx) => {
   const openSubmenu = (): void => {
     if (!state) return;
     if (state.flyout.kind === "open") return; // already open — keep its cursor
-    const subs = state.entries[cursorIndex(state.cursor)]?.submenu;
+    const row = state.entries[cursorIndex(state.cursor)];
+    const subs = row?.kind === "flyout" ? row.submenu : undefined;
     if (!subs?.length) return;
     // open with no cursor; the next arrow/hover selects
     state.flyout = openFlyout();
@@ -296,7 +303,7 @@ export const makeMenu = (ctx: MenuCtx) => {
     const items = subEntries();
     const at = state && state.flyout.kind === "open" ? cursorIndex(state.flyout.cursor) : -1;
     const it = at >= 0 ? items?.[at] : undefined;
-    if (it && !it.sep) it.action();
+    if (it && isActionEntry(it)) it.action();
   };
   // Enter: the flyout's row while the flyout is open, else the cursor's row.
   // A flyout with NO highlighted row has no target — enter is a no-op (the
@@ -310,8 +317,9 @@ export const makeMenu = (ctx: MenuCtx) => {
     const at = cursorIndex(state.cursor);
     if (at < 0) return; // no cursor yet: enter is a no-op
     // parent rows are directly clickable — enter fires the action, → opens
-    // the flyout for the variants
-    state.entries[at]?.action();
+    // the flyout for the variants. A separator is a GAP: no action.
+    const row = state.entries[at];
+    if (row && isActionEntry(row)) row.action();
   };
 
   // small unscoped box spawned at the cursor — no scrim. floats.open replaces

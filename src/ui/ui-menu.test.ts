@@ -24,7 +24,7 @@ const iconSlots: string[] = [];
 const colors = defaultConfig.theme as Theme & Record<string, any>;
 
 const mkEntries = (n: number): ListEntry[] =>
-  Array.from({ length: n }, (_, i) => ({ label: `entry-${i}`, action: () => {} }));
+  Array.from({ length: n }, (_, i) => ({ kind: "item", label: `entry-${i}`, action: () => {} }));
 
 beforeAll(async () => {
   t = await createTestRenderer({ width: 80, height: 24 });
@@ -58,11 +58,28 @@ const panelRows = () => {
 
 describe("openContextMenu", () => {
   test("opens with NO cursor highlight", async () => {
-    menu.openContextMenu(5, 5, "", [{ sep: true, label: "", action: () => {} }, ...mkEntries(2)]);
+    menu.openContextMenu(5, 5, "", [{ kind: "sep" }, ...mkEntries(2)]);
     await t.renderOnce();
     expect(cursorIndex(menu.fileMenuState()!.cursor)).toBe(-1);
     const ints = (r: any) => (r.backgroundColor ? [...r.backgroundColor.toInts()] : [0, 0, 0, 0]);
     for (const r of panelRows()) expect(ints(r)).toEqual([0, 0, 0, 0]);
+    menu.closeFileMenu();
+    await t.renderOnce();
+  });
+
+  test("a separator is a GAP — an empty 1-row box, not a row with an empty label", async () => {
+    // The old shape spelled the kind as a `sep` FLAG on a row that still had
+    // a label and a dummy action; the row builder branched on the flag to
+    // paint a gap. With the kind tagged, the gap IS the separator's shape:
+    // the painted row has NO children at all (no label text, no icon slot).
+    menu.openContextMenu(5, 5, "", [{ kind: "sep" }, ...mkEntries(1)]);
+    await t.renderOnce();
+    const rows = panelRows();
+    expect(rows.length).toBe(2);
+    // the gap: one row tall, nothing painted in it
+    expect((rows[0] as any).getChildren().length).toBe(0);
+    // the real row: it carries its label
+    expect((rows[1] as any).getChildren().length).toBeGreaterThan(0);
     menu.closeFileMenu();
     await t.renderOnce();
   });
@@ -145,9 +162,10 @@ describe("keyboard nav contract (the menu owns the cursor)", () => {
     const calls: string[] = [];
     menu.openContextMenu(5, 5, "", [
       {
+        kind: "flyout",
         label: "Open",
         action: () => calls.push("parent"),
-        submenu: [{ label: "Open in New Tab", action: () => calls.push("sub") }],
+        submenu: [{ kind: "item", label: "Open in New Tab", action: () => calls.push("sub") }],
       },
     ]);
     await t.renderOnce();
@@ -184,8 +202,8 @@ describe("keyboard nav contract (the menu owns the cursor)", () => {
   test("enter fires the cursor's row action", async () => {
     const calls: string[] = [];
     menu.openContextMenu(5, 5, "", [
-      { label: "first", action: () => calls.push("first") },
-      { label: "second", action: () => calls.push("second") },
+      { kind: "item", label: "first", action: () => calls.push("first") },
+      { kind: "item", label: "second", action: () => calls.push("second") },
     ]);
     await t.renderOnce();
     moveDown();
@@ -197,8 +215,13 @@ describe("keyboard nav contract (the menu owns the cursor)", () => {
 
   test("moving the main cursor closes the flyout", async () => {
     const entries: ListEntry[] = [
-      { label: "Open", action: () => {}, submenu: [{ label: "Open in New Tab", action: () => {} }] },
-      { label: "Trash", action: () => {} },
+      {
+        kind: "flyout",
+        label: "Open",
+        action: () => {},
+        submenu: [{ kind: "item", label: "Open in New Tab", action: () => {} }],
+      },
+      { kind: "item", label: "Trash", action: () => {} },
     ];
     menu.openContextMenu(5, 5, "", entries);
     await t.renderOnce();
@@ -286,14 +309,15 @@ describe("flyout submenus", () => {
     const subCalls: string[] = [];
     const entries: ListEntry[] = [
       {
+        kind: "flyout",
         label: "Open",
         action: () => {},
         submenu: [
-          { label: "Open", action: () => subCalls.push("open") },
-          { label: "Open With…", action: () => subCalls.push("openwith") },
+          { kind: "item", label: "Open", action: () => subCalls.push("open") },
+          { kind: "item", label: "Open With…", action: () => subCalls.push("openwith") },
         ],
       },
-      { label: "Trash", action: () => {} },
+      { kind: "item", label: "Trash", action: () => {} },
     ];
     menu.openContextMenu(5, 5, "", entries);
     await t.renderOnce();
@@ -318,7 +342,9 @@ describe("flyout submenus", () => {
   });
 
   test("flies out to the LEFT when the right edge would overflow", async () => {
-    const entries: ListEntry[] = [{ label: "Open", action: () => {}, submenu: [{ label: "Open", action: () => {} }] }];
+    const entries: ListEntry[] = [
+      { kind: "flyout", label: "Open", action: () => {}, submenu: [{ kind: "item", label: "Open", action: () => {} }] },
+    ];
     // px clamps to 80-36-1=43; right flyout (43+36+36) overflows -> flip left
     menu.openContextMenu(60, 5, "", entries);
     await t.renderOnce();
@@ -335,9 +361,10 @@ describe("flyout submenus", () => {
     const calls: string[] = [];
     menu.openContextMenu(5, 5, "", [
       {
+        kind: "flyout",
         label: "Open",
         action: () => calls.push("parent"),
-        submenu: [{ label: "Open in New Tab", action: () => calls.push("sub") }],
+        submenu: [{ kind: "item", label: "Open in New Tab", action: () => calls.push("sub") }],
       },
     ]);
     await t.renderOnce();
@@ -350,7 +377,9 @@ describe("flyout submenus", () => {
   });
 
   test("closing the menu tears the flyout down too", async () => {
-    const entries: ListEntry[] = [{ label: "Open", action: () => {}, submenu: [{ label: "Open", action: () => {} }] }];
+    const entries: ListEntry[] = [
+      { kind: "flyout", label: "Open", action: () => {}, submenu: [{ kind: "item", label: "Open", action: () => {} }] },
+    ];
     menu.openContextMenu(3, 3, "", entries);
     await t.renderOnce();
     menu.moveMain(1);

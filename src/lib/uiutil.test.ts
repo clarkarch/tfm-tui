@@ -16,6 +16,7 @@ import {
   type Cursor,
   type Scheduler,
 } from "./uiutil";
+import type { ListEntry } from "./menu-entry";
 
 // Bun 1.3.14 has no fake timers, so debounced takes an injected Scheduler:
 // these tests advance a virtual clock and never race the wall clock (a
@@ -484,11 +485,12 @@ describe("Cursor", () => {
   });
 
   test("separators are skipped (bounded — an all-separator list cannot spin)", () => {
-    const entries = [{ sep: true }, { sep: false }, { sep: true }];
+    // the menu's rows are tagged: a separator is the GAP between groups
+    const entries: ListEntry[] = [{ kind: "sep" }, { kind: "item", label: "b", action: () => {} }, { kind: "sep" }];
     expect(advanceCursor(NO_CURSOR, 1, 3, entries)).toEqual({ kind: "row", index: 1 });
     expect(advanceCursor(cursorAt(1), 1, 3, entries)).toEqual({ kind: "row", index: 1 });
     // every entry is a separator: the walk is bounded and lands somewhere
-    const allSep = [{ sep: true }, { sep: true }];
+    const allSep: ListEntry[] = [{ kind: "sep" }, { kind: "sep" }];
     expect(advanceCursor(NO_CURSOR, 1, 2, allSep).kind).toBe("row");
   });
 

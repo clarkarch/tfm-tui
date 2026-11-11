@@ -8,6 +8,20 @@ import type { GridTileRef } from "../input/grid-input";
 import type { ClipItem } from "../lib/file-op-protocol";
 import type { Place } from "../fs/places";
 import type { LoadedPlugin } from "../plugins/plugin-api";
+import type { ListEntry, ListFlyout } from "../lib/menu-entry";
+
+// The menu's rows are TAGGED: a separator is a GAP between groups (no
+// label, no action, no flyout), a plain row runs an action, and a flyout row
+// carries its variants. The old shape spelled the kind as parallel optional
+// flags, so every read had to guess — these helpers narrow a row instead.
+const act = (row: ListEntry | undefined): void => {
+  if (!row || row.kind === "sep") throw new Error(`expected an actionable row, got ${row?.kind ?? "none"}`);
+  row.action();
+};
+const flyoutOf = (row: ListEntry | undefined): ListFlyout => {
+  if (row?.kind !== "flyout") throw new Error(`expected a flyout row, got ${row?.kind ?? "none"}`);
+  return row;
+};
 
 // full-shape fakes (absent builders are null, never undefined — matches what
 // the loader hands out, so the guards are exercised exactly as in prod).
@@ -139,12 +153,12 @@ describe("fileEntriesFor", () => {
     expect(entries[0]!.label).toBe("Run");
     expect(entries.some((e) => e.label === "Open")).toBe(false);
     expect(entries.some((e) => e.label === "Run in Terminal")).toBe(false);
-    expect(entries[0]!.submenu!.map((e) => e.label)).toEqual(["Run in Terminal", "Open With…"]);
-    entries[0]!.action();
+    expect(flyoutOf(entries[0]!).submenu!.map((e) => e.label)).toEqual(["Run in Terminal", "Open With…"]);
+    act(entries[0]!);
     expect(ctx.calls).toContain("run:/a");
-    entries[0]!.submenu![0]!.action();
+    act(flyoutOf(entries[0]!).submenu![0]!);
     expect(ctx.calls).toContain("runterm:/a");
-    entries[0]!.submenu![1]!.action();
+    act(flyoutOf(entries[0]!).submenu![1]!);
     expect(ctx.calls).toContain("openWith:/a");
   });
 
@@ -162,27 +176,31 @@ describe("fileEntriesFor", () => {
     // files: Open is directly clickable, Open With… stays in its flyout
     const file = m.fileEntriesFor("/a", false, 0, 0);
     expect(file[0]!.label).toBe("Open");
-    expect(file[0]!.submenu!.map((e) => e.label)).toEqual(["Open With…"]);
-    file[0]!.action();
+    expect(flyoutOf(file[0]!).submenu!.map((e) => e.label)).toEqual(["Open With…"]);
+    act(file[0]!);
     expect(ctx.calls).toContain("open:/a");
-    file[0]!.submenu![0]!.action();
+    act(flyoutOf(file[0]!).submenu![0]!);
     expect(ctx.calls).toContain("openWith:/a");
 
     const dir = m.fileEntriesFor("/d", true, 0, 0);
     expect(dir[0]!.label).toBe("Open");
-    expect(dir[0]!.submenu!.map((e) => e.label)).toEqual(["Open in New Tab", "Open in New Pane", "Open Terminal Here"]);
+    expect(flyoutOf(dir[0]!).submenu!.map((e) => e.label)).toEqual([
+      "Open in New Tab",
+      "Open in New Pane",
+      "Open Terminal Here",
+    ]);
     // the parent row itself opens the folder
-    dir[0]!.action();
+    act(dir[0]!);
     expect(ctx.calls).toContain("navigate:/d");
-    dir[0]!.submenu![0]!.action();
+    act(flyoutOf(dir[0]!).submenu![0]!);
     expect(ctx.calls).toContain("newTab:/d");
-    dir[0]!.submenu![1]!.action();
+    act(flyoutOf(dir[0]!).submenu![1]!);
     expect(ctx.calls).toContain("pane:/d");
-    dir[0]!.submenu![2]!.action();
+    act(flyoutOf(dir[0]!).submenu![2]!);
     expect(ctx.calls).toContain("term:/d");
-    const paste = dir.find((e) => e.label.includes("into folder"));
+    const paste = dir.find((e) => e.label!.includes("into folder"));
     expect(paste?.label).toBe("Paste 1 item into folder");
-    paste!.action();
+    act(paste!);
     expect(ctx.calls).toContain("paste:/d");
   });
 
@@ -191,12 +209,12 @@ describe("fileEntriesFor", () => {
     const m = makeMenuEntries(ctx);
     const entries = m.fileEntriesFor("/a/x.zip", false, 0, 0);
     expect(entries[0]!.label).toBe("Open Archive");
-    expect(entries[0]!.submenu!.map((e) => e.label)).toEqual(["Open", "Open With…"]);
-    entries[0]!.action();
+    expect(flyoutOf(entries[0]!).submenu!.map((e) => e.label)).toEqual(["Open", "Open With…"]);
+    act(entries[0]!);
     expect(ctx.calls).toContain(`navigate:${archiveUri("/a/x.zip")}`);
-    entries[0]!.submenu![0]!.action();
+    act(flyoutOf(entries[0]!).submenu![0]!);
     expect(ctx.calls).toContain("open:/a/x.zip");
-    entries[0]!.submenu![1]!.action();
+    act(flyoutOf(entries[0]!).submenu![1]!);
     expect(ctx.calls).toContain("openWith:/a/x.zip");
   });
 
@@ -208,7 +226,7 @@ describe("fileEntriesFor", () => {
     const m = makeMenuEntries(ctx);
     const entries = m.fileEntriesFor(member, false, 0, 0);
     expect(entries.map((e) => e.label)).toEqual(["Open"]);
-    entries[0]!.action();
+    act(entries[0]!);
     // openFileDefault refuses the member URI (wired to the real handler)
     expect(ctx.calls).toContain(`open:${member}`);
   });
@@ -221,13 +239,13 @@ describe("fileEntriesFor", () => {
     const m = makeMenuEntries(ctx);
     const entries = m.fileEntriesFor(dir, true, 0, 0);
     expect(entries.map((e) => e.label)).toEqual(["Open"]);
-    expect(entries[0]!.submenu!.map((e) => e.label)).toEqual(["Open in New Tab", "Open in New Pane"]);
-    entries[0]!.action();
+    expect(flyoutOf(entries[0]!).submenu!.map((e) => e.label)).toEqual(["Open in New Tab", "Open in New Pane"]);
+    act(entries[0]!);
     expect(ctx.calls).toContain(`navigate:${dir}`);
-    entries[0]!.submenu![0]!.action();
+    act(flyoutOf(entries[0]!).submenu![0]!);
     expect(ctx.calls).toContain(`newTab:${dir}`);
     // none of the real-path actions leak into the archive view
-    expect(entries.some((e) => /Copy|Cut|Rename|Trash|Properties|Duplicate/.test(e.label))).toBe(false);
+    expect(entries.some((e) => /Copy|Cut|Rename|Trash|Properties|Duplicate/.test(e.label ?? ""))).toBe(false);
   });
 
   test("a host that can't list archives keeps the plain Open row", () => {
@@ -235,7 +253,7 @@ describe("fileEntriesFor", () => {
     ctx.canExtract = () => false;
     const entries = makeMenuEntries(ctx).fileEntriesFor("/a/x.zip", false, 0, 0);
     expect(entries[0]!.label).toBe("Open");
-    expect(entries[0]!.submenu!.map((e) => e.label)).toEqual(["Open With…"]);
+    expect(flyoutOf(entries[0]!).submenu!.map((e) => e.label)).toEqual(["Open With…"]);
   });
 
   test("copy/cut/trash target the whole selection", () => {
@@ -247,13 +265,13 @@ describe("fileEntriesFor", () => {
     ];
     const m = makeMenuEntries(ctx);
     const entries = m.fileEntriesFor("/a", false, 0, 0);
-    const copy = entries.find((e) => e.label.startsWith("Copy"));
-    const cut = entries.find((e) => e.label.startsWith("Cut"));
-    const trash = entries.find((e) => e.label.startsWith("Trash"));
+    const copy = entries.find((e) => e.label!.startsWith("Copy"));
+    const cut = entries.find((e) => e.label!.startsWith("Cut"));
+    const trash = entries.find((e) => e.label!.startsWith("Trash"));
     expect(copy!.label).toBe("Copy 2 items");
-    cut!.action();
+    act(cut!);
     expect(ctx.calls).toContain("clip:cut:2");
-    trash!.action();
+    act(trash!);
     expect(ctx.calls).toContain("trash:/a,/b");
   });
 
@@ -265,13 +283,13 @@ describe("fileEntriesFor", () => {
       { path: "/b", isDir: false },
     ];
     const m = makeMenuEntries(ctx);
-    const bulk = m.fileEntriesFor("/a", false, 0, 0).find((e) => e.label.startsWith("Rename"))!;
+    const bulk = m.fileEntriesFor("/a", false, 0, 0).find((e) => e.label!.startsWith("Rename"))!;
     expect(bulk.label).toBe("Rename 2 items…");
-    bulk.action();
+    act(bulk);
     expect(ctx.calls).toContain("bulkrename:/a,/b");
 
-    const solo = m.fileEntriesFor("/z", false, 0, 0).find((e) => e.label.startsWith("Rename"))!;
-    solo.action();
+    const solo = m.fileEntriesFor("/z", false, 0, 0).find((e) => e.label!.startsWith("Rename"))!;
+    act(solo);
     expect(ctx.calls).toContain("rename:/z");
   });
 
@@ -283,10 +301,10 @@ describe("fileEntriesFor", () => {
       { path: "/b", isDir: false },
     ];
     const m = makeMenuEntries(ctx);
-    const dup = m.fileEntriesFor("/a", false, 0, 0).find((e) => e.label.startsWith("Duplicate"))!;
+    const dup = m.fileEntriesFor("/a", false, 0, 0).find((e) => e.label!.startsWith("Duplicate"))!;
     expect(dup.label).toBe("Duplicate 2 items");
     expect(dup.icon).toBe("content-duplicate");
-    dup.action();
+    act(dup);
     expect(ctx.calls).toContain("duplicate:/a,/b");
   });
 
@@ -299,7 +317,7 @@ describe("fileEntriesFor", () => {
     ];
     const m = makeMenuEntries(ctx);
     const props = m.fileEntriesFor("/a", false, 0, 0).find((e) => e.label === "Properties…")!;
-    props.action();
+    act(props);
     expect(ctx.calls).toContain("props:/a,/b");
     // the menu must close before the dialog opens — it floats above every
     // modal, so leaving it open leaves it stuck on the properties UI
@@ -307,7 +325,7 @@ describe("fileEntriesFor", () => {
     expect(ctx.calls.indexOf("close")).toBeLessThan(ctx.calls.indexOf("props:/a,/b"));
 
     const solo = m.fileEntriesFor("/z", false, 0, 0).find((e) => e.label === "Properties…")!;
-    solo.action();
+    act(solo);
     expect(ctx.calls).toContain("props:/z");
   });
 
@@ -317,7 +335,7 @@ describe("fileEntriesFor", () => {
     const m = makeMenuEntries(ctx);
     const entries = m.fileEntriesFor("/trash/f", false, 0, 0);
     expect(entries.map((e) => e.label).sort()).toEqual(["Delete permanently", "Open", "Restore"]);
-    entries.find((e) => e.label === "Restore")!.action();
+    act(entries.find((e) => e.label === "Restore")!);
     expect(ctx.calls).toContain("restore:/trash/f");
   });
 });
@@ -327,26 +345,26 @@ describe("sidebarEntriesFor", () => {
     const ctx = baseCtx();
     const m = makeMenuEntries(ctx);
     const home = m.sidebarEntriesFor(place({ path: "/home/u" }), 0, 0);
-    expect(home.some((e) => e.label.startsWith("Paste"))).toBe(true);
+    expect(home.some((e) => e.label!.startsWith("Paste"))).toBe(true);
     const homeOpen = home.find((e) => e.label === "Open")!;
-    expect(homeOpen.submenu!.map((e) => e.label)).toEqual([
+    expect(flyoutOf(homeOpen).submenu!.map((e) => e.label)).toEqual([
       "Open in New Tab",
       "Open in New Pane",
       "Open Terminal Here",
     ]);
-    homeOpen.action();
+    act(homeOpen);
     expect(ctx.calls).toContain("navigate:/home/u");
-    homeOpen.submenu![1]!.action();
+    act(flyoutOf(homeOpen).submenu![1]!);
     expect(ctx.calls).toContain("pane:/home/u");
-    homeOpen.submenu![2]!.action();
+    act(flyoutOf(homeOpen).submenu![2]!);
     expect(ctx.calls).toContain("term:/home/u");
 
     const trash = m.sidebarEntriesFor(place({ path: TRASH_FILES }), 0, 0);
-    expect(trash.some((e) => e.label.startsWith("Paste"))).toBe(false);
+    expect(trash.some((e) => e.label!.startsWith("Paste"))).toBe(false);
     expect(trash.some((e) => e.label === "Empty Trash")).toBe(true);
 
     const recent = m.sidebarEntriesFor(place({ scheme: "recent" }), 0, 0);
-    recent.find((e) => e.label === "Open")!.action();
+    act(recent.find((e) => e.label === "Open")!);
     expect(ctx.calls).toContain("navigate:recent://");
   });
 
@@ -359,7 +377,7 @@ describe("sidebarEntriesFor", () => {
       0,
       0,
     );
-    mounted.find((e) => e.label === "Disconnect")!.action();
+    act(mounted.find((e) => e.label === "Disconnect")!);
     expect(ctx.calls).toContain(`disconnect:${mountPath}`);
 
     const saved = m.sidebarEntriesFor(
@@ -367,11 +385,11 @@ describe("sidebarEntriesFor", () => {
       0,
       0,
     );
-    saved.find((e) => e.label === "Connect")!.action();
+    act(saved.find((e) => e.label === "Connect")!);
     expect(ctx.calls).toContain("connect:sftp://bob@example.com/");
 
     const connectRow = m.sidebarEntriesFor(place({ path: null, action: "connect" }), 0, 0);
-    connectRow.find((e) => e.label === "Connect to Server…")!.action();
+    act(connectRow.find((e) => e.label === "Connect to Server…")!);
     expect(ctx.calls).toContain("connect:");
   });
 
@@ -382,23 +400,25 @@ describe("sidebarEntriesFor", () => {
     const m = makeMenuEntries(ctx);
     const recent = m.sidebarEntriesFor(place({ scheme: "recent" }), 0, 0);
     expect(recent.some((e) => e.label === "Open Terminal Here")).toBe(false);
-    expect(recent.find((e) => e.label === "Open")!.submenu!.some((e) => e.label === "Open Terminal Here")).toBe(false);
-    expect(recent.some((e) => e.label.startsWith("Paste"))).toBe(false);
+    expect(
+      flyoutOf(recent.find((e) => e.label === "Open")!).submenu!.some((e) => e.label === "Open Terminal Here"),
+    ).toBe(false);
+    expect(recent.some((e) => e.label!.startsWith("Paste"))).toBe(false);
   });
 
   test("eject / mount / bookmark removal", () => {
     const ctx = baseCtx();
     const m = makeMenuEntries(ctx);
-    m.sidebarEntriesFor(place({ label: "USB", path: "/media/usb", ejectable: true, device: "sdb1" }), 0, 0)
-      .find((e) => e.label === "Eject")!
-      .action();
+    act(
+      m
+        .sidebarEntriesFor(place({ label: "USB", path: "/media/usb", ejectable: true, device: "sdb1" }), 0, 0)
+        .find((e) => e.label === "Eject")!,
+    );
     // the menu passes the row label + mountpoint through so the toast names
     // the device and ejectDevice can leave the cwd first
     expect(ctx.calls).toContain("eject:sdb1:USB:/media/usb");
 
-    m.sidebarEntriesFor(place({ label: "STICK", mountDevice: "sdc" }), 0, 0)
-      .find((e) => e.label === "Mount")!
-      .action();
+    act(m.sidebarEntriesFor(place({ label: "STICK", mountDevice: "sdc" }), 0, 0).find((e) => e.label === "Mount")!);
     expect(ctx.calls).toContain("mount:sdc:STICK");
 
     const bm = m.sidebarEntriesFor(place({ path: "/home/u/Docs", bookmarked: true }), 0, 0);
@@ -413,9 +433,9 @@ describe("sortEntries / emptyAreaEntries", () => {
     const m = makeMenuEntries(ctx);
     const entries = m.sortEntries();
     expect(entries.find((e) => e.label === "Name")!.hintIcon).toBe("arrow-up");
-    entries.find((e) => e.label === "Name")!.action();
+    act(entries.find((e) => e.label === "Name")!);
     expect(ctx.sortState).toEqual({ sortBy: "name", sortAsc: false });
-    entries.find((e) => e.label === "Size")!.action();
+    act(entries.find((e) => e.label === "Size")!);
     expect(ctx.sortState).toEqual({ sortBy: "size", sortAsc: false });
     expect(ctx.calls).toContain("close");
   });
@@ -426,7 +446,7 @@ describe("sortEntries / emptyAreaEntries", () => {
     const m = makeMenuEntries(ctx);
     const entries = m.emptyAreaEntries(0, 0);
     expect(entries.map((e) => e.label)).toEqual(["Select all"]);
-    entries[0]!.action();
+    act(entries[0]!);
     expect(ctx.calls).toContain("selectAll");
   });
 
@@ -436,10 +456,22 @@ describe("sortEntries / emptyAreaEntries", () => {
     const entries = m.emptyAreaEntries(0, 0);
     expect(entries.find((e) => e.label === "New File")!.icon).toBe("file");
     expect(entries.find((e) => e.label === "New Folder")!.icon).toBe("folder-plus");
-    expect(entries.some((e) => e.sep)).toBe(true);
+    expect(entries.some((e) => e.kind === "sep")).toBe(true);
     expect(entries.at(-1)!.label).toBe("Open Terminal Here");
-    entries.find((e) => e.label.startsWith("Paste"))!.action();
+    act(entries.find((e) => e.label!.startsWith("Paste"))!);
     expect(ctx.calls).toContain("paste:/home/u");
+  });
+
+  test("a separator needs no action (the row kind is tagged)", () => {
+    // A separator is a GAP between groups: it has no label, no action and
+    // no flyout. The old shape forced every separator to carry a dummy
+    // `action: () => {}` that existed only because the kind was not tagged.
+    const ctx = baseCtx();
+    const m = makeMenuEntries(ctx);
+    const entries = m.emptyAreaEntries(0, 0);
+    const sep = entries.find((e) => e.kind === "sep");
+    expect(sep).toBeTruthy();
+    expect(sep).not.toHaveProperty("action");
   });
 
   test("trash view empty-area is Empty Trash + select only (no create/paste/terminal)", () => {
@@ -471,7 +503,7 @@ describe("plugin fileMenu entries", () => {
     const m = makeMenuEntries(ctx);
     const entries = m.fileEntriesFor("/a", false, 0, 0);
     expect(entries.at(-1)!.label).toBe("Inspect 1");
-    entries.at(-1)!.action();
+    act(entries.at(-1)!);
     // menu closes before the plugin runs (same rule as Properties…)
     expect(ctx.calls.indexOf("close")).toBeLessThan(ctx.calls.indexOf("inspect:/a"));
   });
@@ -492,7 +524,7 @@ describe("plugin fileMenu entries", () => {
     ];
     const m = makeMenuEntries(ctx);
     const entries = m.fileEntriesFor("/a", false, 0, 0);
-    expect(entries.some((e) => e.label.startsWith("Inspect"))).toBe(false);
+    expect(entries.some((e) => e.label!.startsWith("Inspect"))).toBe(false);
     expect(entries.some((e) => e.label === "Good")).toBe(false); // missing run
     expect(entries.some((e) => e.label === "Open")).toBe(true); // core intact
   });
@@ -500,7 +532,7 @@ describe("plugin fileMenu entries", () => {
   test("no plugins field means no plugin section (existing menus frozen)", () => {
     const ctx = baseCtx();
     const m = makeMenuEntries(ctx);
-    expect(m.fileEntriesFor("/a", false, 0, 0).some((e) => e.sep)).toBe(false);
+    expect(m.fileEntriesFor("/a", false, 0, 0).some((e) => e.kind === "sep")).toBe(false);
   });
 
   test("sidebar plugins append after core rows with the place target", () => {
@@ -516,7 +548,7 @@ describe("plugin fileMenu entries", () => {
     const m = makeMenuEntries(ctx);
     const entries = m.sidebarEntriesFor({ path: "/media/usb" } as any, 0, 0);
     expect(entries.at(-1)!.label).toBe("Side /media/usb");
-    entries.at(-1)!.action();
+    act(entries.at(-1)!);
     expect(ctx.calls.indexOf("close")).toBeLessThan(ctx.calls.indexOf("side:/media/usb"));
   });
 
@@ -559,7 +591,7 @@ describe("plugin fileMenu entries", () => {
     ];
     const m = makeMenuEntries(ctx);
     const boom = m.fileEntriesFor("/a", false, 0, 0).find((e) => e.label === "SlowBoom")!;
-    expect(() => boom.action()).not.toThrow();
+    expect(() => act(boom)).not.toThrow();
     expect(ctx.calls).toContain("close");
     await Bun.sleep(10);
     expect(errs.length).toBe(1);
@@ -586,7 +618,7 @@ describe("plugin fileMenu entries", () => {
     const m = makeMenuEntries(ctx);
     const entries = m.fileEntriesFor("/a", false, 0, 0);
     const boom = entries.find((e) => e.label === "Boom")!;
-    expect(() => boom.action()).not.toThrow();
+    expect(() => act(boom)).not.toThrow();
     // close runs first even when the plugin throws (same ordering rule)
     expect(ctx.calls).toContain("close");
     expect(errs.length).toBe(1);
@@ -601,11 +633,11 @@ describe("archive entries", () => {
     const entries = m.fileEntriesFor("/a.tar.gz", false, 0, 0);
     expect(entries.find((e) => e.label === "Extract Here")!.icon).toBe("zip-box");
     expect(entries.find((e) => e.label === "Compress to…")).toBeTruthy();
-    expect(entries.filter((e) => e.label.startsWith("Compress")).length).toBe(1);
+    expect(entries.filter((e) => e.label!.startsWith("Compress")).length).toBe(1);
 
-    entries.find((e) => e.label === "Extract Here")!.action();
+    act(entries.find((e) => e.label === "Extract Here")!);
     expect(ctx.calls).toContain("extract:/a.tar.gz:/home/u");
-    entries.find((e) => e.label === "Compress to…")!.action();
+    act(entries.find((e) => e.label === "Compress to…")!);
     expect(ctx.calls).toContain("compressTo:/a.tar.gz");
     // menu closes before the op starts (same rule as Properties…)
     expect(ctx.calls.indexOf("close")).toBeLessThan(ctx.calls.indexOf("extract:/a.tar.gz:/home/u"));
@@ -635,7 +667,7 @@ describe("archive entries", () => {
     ctx.canExtract = (p) => p.endsWith(".tar.gz") || p.endsWith(".zip");
     const m = makeMenuEntries(ctx);
     const extract = m.fileEntriesFor("/a.tar.gz", false, 0, 0).find((e) => e.label === "Extract 2 Archives Here")!;
-    extract.action();
+    act(extract);
     expect(ctx.calls).toContain("extract:/a.tar.gz,/b.zip:/home/u");
   });
 
@@ -645,7 +677,7 @@ describe("archive entries", () => {
     const m = makeMenuEntries(ctx);
     const entries = m.fileEntriesFor("/a.tar.gz", false, 0, 0);
     expect(entries.some((e) => e.label === "Extract Here")).toBe(false);
-    expect(entries.some((e) => e.label.startsWith("Compress to"))).toBe(false);
+    expect(entries.some((e) => e.label!.startsWith("Compress to"))).toBe(false);
   });
 
   test("directories compress but never extract", () => {
@@ -662,12 +694,16 @@ describe("open submenu", () => {
     const m = makeMenuEntries(baseCtx());
     const entries = m.fileEntriesFor("/a", false, 0, 0);
     expect(entries[0]!.label).toBe("Open");
-    expect(entries[0]!.submenu!.map((e) => e.label)).toEqual(["Open With…"]);
+    expect(flyoutOf(entries[0]!).submenu!.map((e) => e.label)).toEqual(["Open With…"]);
   });
   test("dir Open is direct with a New Tab / New Pane / Terminal submenu", () => {
     const m = makeMenuEntries(baseCtx());
     const open = m.fileEntriesFor("/d", true, 0, 0)[0]!;
     expect(open.label).toBe("Open");
-    expect(open.submenu!.map((e) => e.label)).toEqual(["Open in New Tab", "Open in New Pane", "Open Terminal Here"]);
+    expect(flyoutOf(open).submenu!.map((e) => e.label)).toEqual([
+      "Open in New Tab",
+      "Open in New Pane",
+      "Open Terminal Here",
+    ]);
   });
 });

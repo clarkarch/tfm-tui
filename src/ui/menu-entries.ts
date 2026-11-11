@@ -101,6 +101,7 @@ export const makeMenuEntries = (ctx: MenuEntriesCtx) => {
       const run = e.run;
       const hint = typeof e.hint === "string" ? e.hint : undefined;
       out.push({
+        kind: "item",
         label: e.label,
         ...(hint ? { hint } : {}),
         action: () => {
@@ -155,7 +156,7 @@ export const makeMenuEntries = (ctx: MenuEntriesCtx) => {
   const withPluginSection = (entries: ListEntry[], targets: ClipItem[]): ListEntry[] => {
     const extra = pluginEntriesFor(targets);
     if (!extra.length) return entries;
-    entries.push({ sep: true, label: "", action: () => {} }, ...extra);
+    entries.push({ kind: "sep" }, ...extra);
     return entries;
   };
 
@@ -165,18 +166,19 @@ export const makeMenuEntries = (ctx: MenuEntriesCtx) => {
   ): ListEntry[] => {
     const extra = pluginSidebarFor(place);
     if (!extra.length) return entries;
-    entries.push({ sep: true, label: "", action: () => {} }, ...extra);
+    entries.push({ kind: "sep" }, ...extra);
     return entries;
   };
 
   const withEmptyPluginSection = (entries: ListEntry[], cwd: string): ListEntry[] => {
     const extra = pluginEmptyFor(cwd);
     if (!extra.length) return entries;
-    entries.push({ sep: true, label: "", action: () => {} }, ...extra);
+    entries.push({ kind: "sep" }, ...extra);
     return entries;
   };
 
   const selectAllEntry = (): ListEntry => ({
+    kind: "item",
     icon: "select-all",
     label: "Select all",
     action: () => {
@@ -191,6 +193,7 @@ export const makeMenuEntries = (ctx: MenuEntriesCtx) => {
   // fs dir (virtual sidebar URIs, archive:// members — a shell cannot cd
   // there), so the omission is an explicit flag, not a third copy of the rows.
   const openDirEntry = (target: string, opts: { terminal: boolean }): ListEntry => ({
+    kind: "flyout",
     icon: "folder",
     label: "Open",
     action: () => {
@@ -199,6 +202,7 @@ export const makeMenuEntries = (ctx: MenuEntriesCtx) => {
     },
     submenu: [
       {
+        kind: "item",
         icon: "plus",
         label: "Open in New Tab",
         action: () => {
@@ -207,6 +211,7 @@ export const makeMenuEntries = (ctx: MenuEntriesCtx) => {
         },
       },
       {
+        kind: "item",
         icon: "border-vertical",
         label: "Open in New Pane",
         action: () => {
@@ -217,13 +222,14 @@ export const makeMenuEntries = (ctx: MenuEntriesCtx) => {
       ...(opts.terminal
         ? [
             {
+              kind: "item",
               icon: "terminal",
               label: "Open Terminal Here",
               action: () => {
                 ctx.closeFileMenu();
                 ctx.openTerminalHere(target);
               },
-            },
+            } satisfies ListEntry,
           ]
         : []),
     ],
@@ -240,6 +246,7 @@ export const makeMenuEntries = (ctx: MenuEntriesCtx) => {
       // paste into real places (not virtual views, not the trash)
       if (!place.scheme && target !== trashFiles()) {
         entries.push({
+          kind: "item",
           icon: "content-paste",
           label: pasteLabel(ctx.clipboard()?.items.length ?? 0),
           action: () => {
@@ -250,6 +257,7 @@ export const makeMenuEntries = (ctx: MenuEntriesCtx) => {
       }
       if (target === trashFiles()) {
         entries.push({
+          kind: "item",
           icon: "trash-can",
           label: "Empty Trash",
           action: () => {
@@ -259,6 +267,7 @@ export const makeMenuEntries = (ctx: MenuEntriesCtx) => {
         });
       } else if (place.bookmarked) {
         entries.push({
+          kind: "item",
           icon: "bookmark",
           label: "Remove bookmark",
           action: () => {
@@ -280,6 +289,7 @@ export const makeMenuEntries = (ctx: MenuEntriesCtx) => {
     const mountDevice = place.mountDevice;
     if (place.ejectable && device) {
       entries.push({
+        kind: "item",
         icon: "eject",
         label: "Eject",
         action: () => {
@@ -296,6 +306,7 @@ export const makeMenuEntries = (ctx: MenuEntriesCtx) => {
     }
     if (!target && mountDevice) {
       entries.push({
+        kind: "item",
         icon: "usb",
         label: "Mount",
         action: () => {
@@ -308,6 +319,7 @@ export const makeMenuEntries = (ctx: MenuEntriesCtx) => {
     // connections connect, and the pseudo-row opens the prompt
     if (place.action === "connect") {
       entries.push({
+        kind: "item",
         icon: "network",
         label: "Connect to Server…",
         action: () => {
@@ -318,6 +330,7 @@ export const makeMenuEntries = (ctx: MenuEntriesCtx) => {
     } else if (place.network && place.path) {
       const mountPath = place.path;
       entries.push({
+        kind: "item",
         icon: "network",
         label: "Disconnect",
         action: () => {
@@ -328,6 +341,7 @@ export const makeMenuEntries = (ctx: MenuEntriesCtx) => {
     } else if (place.network && place.networkUri) {
       const networkUri = place.networkUri;
       entries.push({
+        kind: "item",
         icon: "network",
         label: "Connect",
         action: () => {
@@ -348,6 +362,7 @@ export const makeMenuEntries = (ctx: MenuEntriesCtx) => {
       const targets: ClipItem[] = inSel && ctx.selPaths().length > 1 ? ctx.selPaths() : [{ path: targetPath, isDir }];
       entries.push(
         {
+          kind: "item",
           icon: "folder",
           label: `Restore${inSel && targets.length > 1 ? ` ${targets.length} items` : ""}`,
           action: () => {
@@ -356,6 +371,7 @@ export const makeMenuEntries = (ctx: MenuEntriesCtx) => {
           },
         },
         {
+          kind: "item",
           icon: "eye",
           label: "Open",
           action: () => {
@@ -364,6 +380,7 @@ export const makeMenuEntries = (ctx: MenuEntriesCtx) => {
           },
         },
         {
+          kind: "item",
           icon: "trash-can",
           label: `Delete permanently`,
           action: () => {
@@ -389,6 +406,7 @@ export const makeMenuEntries = (ctx: MenuEntriesCtx) => {
         // a member file can't be opened yet (per-entry extract is deferred):
         // openFileDefault refuses an archive URI with an honest toast
         entries.push({
+          kind: "item",
           icon: "eye",
           label: "Open",
           action: () => {
@@ -408,6 +426,7 @@ export const makeMenuEntries = (ctx: MenuEntriesCtx) => {
       entries.push(openDirEntry(targetPath, { terminal: true }));
     } else if (isExec) {
       entries.push({
+        kind: "flyout",
         icon: "play",
         label: "Run",
         action: () => {
@@ -416,6 +435,7 @@ export const makeMenuEntries = (ctx: MenuEntriesCtx) => {
         },
         submenu: [
           {
+            kind: "item",
             icon: "terminal",
             label: "Run in Terminal",
             action: () => {
@@ -424,6 +444,7 @@ export const makeMenuEntries = (ctx: MenuEntriesCtx) => {
             },
           },
           {
+            kind: "item",
             icon: "cog",
             label: "Open With…",
             action: () => {
@@ -439,6 +460,7 @@ export const makeMenuEntries = (ctx: MenuEntriesCtx) => {
       const archive = ctx.canExtract(targetPath) ? archiveBrowseUri(targetPath, false) : null;
       const submenu: ListEntry[] = [
         {
+          kind: "item",
           icon: "cog",
           label: "Open With…",
           action: () => {
@@ -449,6 +471,7 @@ export const makeMenuEntries = (ctx: MenuEntriesCtx) => {
       ];
       if (archive) {
         submenu.unshift({
+          kind: "item",
           icon: "eye",
           label: "Open",
           action: () => {
@@ -458,6 +481,7 @@ export const makeMenuEntries = (ctx: MenuEntriesCtx) => {
         });
       }
       entries.push({
+        kind: "flyout",
         icon: archive ? "zip-box" : "eye",
         label: archive ? "Open Archive" : "Open",
         action: () => {
@@ -475,6 +499,7 @@ export const makeMenuEntries = (ctx: MenuEntriesCtx) => {
     const nSuffix = inSel && targets.length > 1 ? ` ${targets.length} items` : "";
     entries.push(
       {
+        kind: "item",
         icon: "content-copy",
         label: `Copy${nSuffix}`,
         action: () => {
@@ -483,6 +508,7 @@ export const makeMenuEntries = (ctx: MenuEntriesCtx) => {
         },
       },
       {
+        kind: "item",
         icon: "content-cut",
         label: `Cut${nSuffix}`,
         action: () => {
@@ -491,6 +517,7 @@ export const makeMenuEntries = (ctx: MenuEntriesCtx) => {
         },
       },
       {
+        kind: "item",
         icon: "content-duplicate",
         label: `Duplicate${nSuffix}`,
         action: () => {
@@ -501,6 +528,7 @@ export const makeMenuEntries = (ctx: MenuEntriesCtx) => {
       ...(isDir
         ? [
             {
+              kind: "item",
               icon: "content-paste",
               label: pasteLabel(ctx.clipboard()?.items.length ?? 0, " into folder"),
               action: () => {
@@ -511,6 +539,7 @@ export const makeMenuEntries = (ctx: MenuEntriesCtx) => {
           ]
         : []),
       {
+        kind: "item",
         icon: "pencil",
         label: targets.length > 1 ? `Rename ${targets.length} items…` : "Rename…",
         action: () => {
@@ -520,6 +549,7 @@ export const makeMenuEntries = (ctx: MenuEntriesCtx) => {
         },
       },
       {
+        kind: "item",
         icon: "trash-can",
         label: `Trash${nSuffix}`,
         action: () => {
@@ -534,6 +564,7 @@ export const makeMenuEntries = (ctx: MenuEntriesCtx) => {
       const archives = targets.map((t) => t.path).filter((p) => ctx.canExtract(p));
       if (!isDir && archives.length) {
         entries.push({
+          kind: "item",
           icon: "zip-box",
           label: archives.length > 1 ? `Extract ${archives.length} Archives Here` : "Extract Here",
           action: () => {
@@ -545,6 +576,7 @@ export const makeMenuEntries = (ctx: MenuEntriesCtx) => {
       const formats = ctx.compressionFormats();
       if (formats.length) {
         entries.push({
+          kind: "item",
           icon: "package",
           label: "Compress to…",
           action: () => {
@@ -555,6 +587,7 @@ export const makeMenuEntries = (ctx: MenuEntriesCtx) => {
       }
     }
     entries.push({
+      kind: "item",
       icon: "information",
       label: "Properties…",
       action: () => {
@@ -579,6 +612,7 @@ export const makeMenuEntries = (ctx: MenuEntriesCtx) => {
       void ctx.renderGrid();
     };
     const entry = (key: SortMode, label: string, naturalAsc: boolean): ListEntry => ({
+      kind: "item",
       label,
       ...(ctx.sortState.sortBy === key ? { hintIcon: ctx.sortState.sortAsc ? "arrow-up" : "arrow-down" } : {}),
       action: () => pick(key, naturalAsc),
@@ -599,6 +633,7 @@ export const makeMenuEntries = (ctx: MenuEntriesCtx) => {
       // no .trashinfo — so unlike normal dirs it gets Empty Trash + select
       // only, not the create/paste/terminal set.
       entries.push({
+        kind: "item",
         icon: "trash-can",
         label: "Empty Trash",
         action: () => {
@@ -616,6 +651,7 @@ export const makeMenuEntries = (ctx: MenuEntriesCtx) => {
     }
     entries.push(
       {
+        kind: "item",
         icon: "file",
         label: "New File",
         action: () => {
@@ -624,6 +660,7 @@ export const makeMenuEntries = (ctx: MenuEntriesCtx) => {
         },
       },
       {
+        kind: "item",
         icon: "folder-plus",
         label: "New Folder",
         action: () => {
@@ -633,6 +670,7 @@ export const makeMenuEntries = (ctx: MenuEntriesCtx) => {
       },
       selectAllEntry(),
       {
+        kind: "item",
         icon: "content-paste",
         label: pasteLabel(ctx.clipboard()?.items.length ?? 0),
         action: () => {
@@ -641,6 +679,7 @@ export const makeMenuEntries = (ctx: MenuEntriesCtx) => {
         },
       },
       {
+        kind: "item",
         icon: "information",
         label: "Properties…",
         action: () => {
@@ -649,8 +688,9 @@ export const makeMenuEntries = (ctx: MenuEntriesCtx) => {
         },
       },
       // nautilus puts shell access in its own group at the bottom
-      { sep: true, label: "", action: () => {} },
+      { kind: "sep" },
       {
+        kind: "item",
         icon: "terminal",
         label: "Open Terminal Here",
         action: () => {

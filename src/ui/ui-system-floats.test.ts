@@ -97,8 +97,8 @@ const mkMenu = (colors: Theme) =>
   });
 
 const entries: ListEntry[] = [
-  { label: "alpha", action: () => {} },
-  { label: "beta", action: () => {} },
+  { kind: "item", label: "alpha", action: () => {} },
+  { kind: "item", label: "beta", action: () => {} },
 ];
 
 describe("system-derived theme paints floating UI", () => {
