@@ -11,6 +11,8 @@ import {
   findKeybindConflicts,
   gateAllows,
   keybindConflict,
+  keybindValue,
+  migrateRow,
   normalizeSettingRow,
   parseConfigDoc,
   serializeConfig,
@@ -81,6 +83,74 @@ describe("parseConfigDoc", () => {
     expect(cfg.keys.quit).toEqual([]);
     // a NON-empty array that parses to nothing still falls back (typo safety)
     expect(parseConfigDoc({ keys: { quit: ["bogus+keys+x"] } }).keys.quit).toEqual(["ctrl+q"]);
+  });
+
+  test("[keys]: the row's state is ONE tag — unbound / bound / invalid", () => {
+    // The old shape encoded three states in ONE array field: an explicit
+    // empty array (a real UNBIND), a non-empty array (bound), and a
+    // non-empty array whose specs all fail to parse (invalid → the row's
+    // default). The rule that told them apart (`raw.length === 0`) lived
+    // inside the coercion with no name and no owner — so a second reader
+    // could not tell "unbound" from "nothing parsed".
+    expect(keybindValue([])).toEqual({ kind: "unbound" });
+    expect(keybindValue(["ctrl+n"])).toEqual({ kind: "bound", specs: ["ctrl+n"] });
+    // a NON-empty array that parses to nothing is the THIRD state — not
+    // "unbound" (that would silently disable the bind instead of falling
+    // back to the default)
+    expect(keybindValue(["bogus+keys+x"])).toEqual({ kind: "invalid" });
+    // not an array at all → invalid (the row's default applies)
+    expect(keybindValue("ctrl+n")).toEqual({ kind: "invalid" });
+    // the parse is parse-only and dedupes
+    expect(keybindValue(["ctrl+n", "ctrl+n", "bogus+keys+x"])).toEqual({ kind: "bound", specs: ["ctrl+n"] });
+  });
+
+  test("the legacy spellings are DATA on the row, not a code block that overrides the coercion", () => {
+    const row = (prop: string) => UI_SCHEMA.find((r) => r.prop === prop);
+    // each row that has a legacy spelling DECLARES it — the migration table
+    // is a column, not a block that runs after the coercion and wins by
+    // ORDER
+    expect(typeof row("wrapMode")!.migrate).toBe("function");
+    expect(typeof row("transparentBg")!.migrate).toBe("function");
+    expect(typeof row("sidebarTitle")!.migrate).toBe("function");
+    // the migration answers with a value in the row's OWN legal set (the
+    // answer goes through the row's coercion): the alias "opaque" is not a
+    // legal transparent-bg value, so the answer is "off", not the alias
+    expect(row("transparentBg")!.migrate!({ "transparent-bg": "opaque" })).toBe("off");
+    expect(row("transparentBg")!.migrate!({ "transparent-bg": "transparent" })).toBe("on");
+    // the RENAME only applies when the NEW key is absent — the old key
+    // never overrides the new one
+    expect(row("wrapMode")!.migrate!({ "word-wrap": true })).toBe("char");
+    expect(row("wrapMode")!.migrate!({ "word-wrap": true, "wrap-mode": "word" })).toBeUndefined();
+    // a row with no legacy spelling says so
+    expect(row("icons")!.migrate).toBeUndefined();
+  });
+
+  test("a migration's answer goes through the row's OWN coercion", () => {
+    const row = UI_SCHEMA.find((r) => r.prop === "transparentBg")!;
+    // the alias "opaque" is not a legal transparent-bg value — the row's
+    // migration answers with the LEGAL value ("off"), and the answer comes
+    // back coerced
+    expect(migrateRow(row, { "transparent-bg": "opaque" })).toEqual({ value: "off" });
+    // a migration that answers with an ILLEGAL value is refused — the row
+    // keeps its default (the migration table can never land a bad value)
+    expect(migrateRow({ ...row, migrate: () => "bogus" }, {})).toBeNull();
+    // no legacy spelling answered → null (the row keeps its default)
+    expect(migrateRow(row, { "transparent-bg": "on" })).toBeNull();
+  });
+
+  test("a present-but-invalid value still migrates", () => {
+    // the legacy spellings are values the row's own coercion REJECTS (they
+    // are not in its legal set), so the migration is the fallback that
+    // answers for them
+    expect(parseConfigDoc({ ui: { "transparent-bg": "transparent" } }).ui.transparentBg).toBe("on");
+    expect(parseConfigDoc({ ui: { "sidebar-title": false } }).ui.sidebarTitle).toBe("none");
+    // the renamed key: the old bool migrates when the new key is absent
+    expect(parseConfigDoc({ ui: { "word-wrap": true } }).ui.wrapMode).toBe("char");
+    expect(parseConfigDoc({ ui: { "word-wrap": false } }).ui.wrapMode).toBe("none");
+    // ...and the new key wins when it is there (even hand-edited to an
+    // illegal value — the old key does not paper over it)
+    expect(parseConfigDoc({ ui: { "word-wrap": true, "wrap-mode": "word" } }).ui.wrapMode).toBe("word");
+    expect(parseConfigDoc({ ui: { "word-wrap": true, "wrap-mode": "bogus" } }).ui.wrapMode).toBe("none");
   });
 
   test("[keys]: bare letters load from file (presets bind j/k…; capture UI still reserves them)", () => {

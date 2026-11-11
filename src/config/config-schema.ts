@@ -520,9 +520,17 @@ type RowCommon = {
   // must always be one glance from its master toggle, never in another
   // category. Masters themselves are always visible.
   gate?: UiGate;
+  // the row's LEGACY spelling: a value (or a renamed key) from an older
+  // config that migrates into this row's value. The function reads the raw
+  // section and returns the migrated value, or undefined for "no legacy
+  // spelling here". Two rules: the answer goes through the row's OWN
+  // coercion (so a migration can never land an illegal value in the
+  // config), and the table is DATA on the row — not a code block that runs
+  // after the coercion and overrides it by ORDER.
+  migrate?: (raw: Record<string, unknown>) => unknown;
 };
 
-type SchemaRow =
+export type SchemaRow =
   | (RowCommon & {
       kind: "int";
       section: "ui";
@@ -586,6 +594,17 @@ const UI_ROWS = [
     blurb: "How long lines wrap: cut, by character, by word",
     group: "layout",
     subsection: "view",
+    // renamed key: the old `word-wrap` bool migrates to `wrap-mode`
+    // (true = char, false = none) and only applies when the new key is
+    // absent, so existing configs keep working through the rename.
+    migrate: (raw) =>
+      raw["wrap-mode"] !== undefined
+        ? undefined
+        : raw["word-wrap"] === true
+          ? "char"
+          : raw["word-wrap"] === false
+            ? "none"
+            : undefined,
   },
   {
     kind: "bool",
@@ -627,6 +646,14 @@ const UI_ROWS = [
     blurb: "What sits above the sidebar",
     group: "layout",
     subsection: "sidebar",
+    // same-key type change: `sidebar-title` was a bool (true = logo, false =
+    // none); a boolean value migrates to the matching mode.
+    migrate: (raw) => {
+      const v = raw["sidebar-title"];
+      if (v === true) return "tfm";
+      if (v === false) return "none";
+      return undefined;
+    },
   },
   {
     kind: "bool",
@@ -1076,6 +1103,19 @@ const UI_ROWS = [
     blurb: "Let a transparent terminal show through",
     group: "appearance",
     subsection: "look",
+    // same-key type change: `transparent-bg` was a bool (true = transparent,
+    // false = opaque); a boolean value migrates to the matching enum member.
+    // The first enum spelling (opaque/transparent) never shipped a release
+    // but may sit in a hand-edited config — alias it instead of dropping to
+    // the default.
+    migrate: (raw) => {
+      const v = raw["transparent-bg"];
+      if (v === true) return "on";
+      if (v === false) return "off";
+      if (v === "opaque") return "off";
+      if (v === "transparent") return "on";
+      return undefined;
+    },
   },
   {
     kind: "enum",
@@ -2323,6 +2363,36 @@ const clampInt = (v: unknown, min: number, max: number, fallback: number): numbe
   return Math.min(max, Math.max(min, n));
 };
 
+// --- the keybind row's state: ONE tag, ONE owner ---
+//
+// The row's three states used to hide in ONE array field: an explicit empty
+// array (a real UNBIND), a non-empty array (bound), and a non-empty array
+// whose specs all fail to parse (invalid → the row's default). The rule
+// that told them apart (`raw.length === 0`) lived inside the coercion with
+// no name and no owner — so a second reader could not tell "unbound" from
+// "nothing parsed" (the two demand OPPOSITE fallbacks).
+export type KeybindValue = { kind: "unbound" } | { kind: "bound"; specs: string[] } | { kind: "invalid" };
+
+// the ONE owner of that decision.
+// The parse is parse-only: bare letters/symbols are loadable from
+// file/presets (the yazi preset binds j/k/h/l…) — the dispatch order (bound
+// keys before the type-to-search catch-all) + the [ui] type-to-search knob
+// decide what typing does. The settings capture UI still validates strictly
+// (validateKeybindSpec).
+export const keybindValue = (raw: unknown): KeybindValue => {
+  if (!Array.isArray(raw)) return { kind: "invalid" };
+  // an explicit empty array is a real UNBIND, not a typo: the yazi preset
+  // ships [] for duplicate/reloadPlaces and it round-trips through TOML —
+  // falling back to row.def here silently re-enabled those binds on the
+  // next load (ctrl+r ended up on two actions, preset read as "custom")
+  if (raw.length === 0) return { kind: "unbound" };
+  const specs = raw
+    .filter((s): s is string => typeof s === "string" && parseKeySpec(s) !== null)
+    .filter((s, i, a) => a.indexOf(s) === i);
+  // a NON-empty array that parses to nothing still falls back (typo safety)
+  return specs.length ? { kind: "bound", specs } : { kind: "invalid" };
+};
+
 // per-row coercion of one raw TOML value; undefined = keep default
 const coerceRow = (row: SchemaRow, raw: unknown): { ok: boolean; value: unknown } => {
   switch (row.kind) {
@@ -2337,60 +2407,49 @@ const coerceRow = (row: SchemaRow, raw: unknown): { ok: boolean; value: unknown 
     case "hex":
       return typeof raw === "string" && HEX_RE.test(raw) ? { ok: true, value: raw } : { ok: false, value: row.def };
     case "key": {
-      if (!Array.isArray(raw)) return { ok: false, value: row.def };
-      // parse-only: bare letters/symbols are loadable from file/presets (the
-      // yazi preset binds j/k/h/l…). Dispatch order (bound keys before the
-      // type-to-search catch-all) + the [ui] type-to-search knob decide what
-      // typing does. The settings capture UI still validates strictly.
-      const specs = raw
-        .filter((s): s is string => typeof s === "string" && parseKeySpec(s) !== null)
-        .filter((s, i, a) => a.indexOf(s) === i);
-      // an explicit empty array is a real UNBIND, not a typo: the yazi preset
-      // ships [] for duplicate/reloadPlaces and it round-trips through TOML —
-      // falling back to row.def here silently re-enabled those binds on the
-      // next load (ctrl+r ended up on two actions, preset read as "custom")
-      if (raw.length === 0) return { ok: true, value: [] };
-      return { ok: true, value: specs.length ? specs : row.def };
+      const value = keybindValue(raw);
+      if (value.kind === "unbound") return { ok: true, value: [] };
+      if (value.kind === "bound") return { ok: true, value: value.specs };
+      // invalid → the row's default applies (the caller keeps it)
+      return { ok: false, value: row.def };
     }
   }
+};
+
+// the row's LEGACY spelling, answered through the row's OWN coercion: a
+// migration that answers with an illegal value is refused (the row keeps
+// its default), so the migration table can never land a bad value in the
+// config. null = "no legacy spelling answered" (the row keeps its default).
+export const migrateRow = (row: SchemaRow, section: Record<string, unknown>): { value: unknown } | null => {
+  const migrated = row.migrate?.(section);
+  if (migrated === undefined) return null;
+  const coerced = coerceRow(row, migrated);
+  return coerced.ok ? { value: coerced.value } : null;
 };
 
 export function parseConfigDoc(doc: unknown): Config {
   const cfg = structuredClone(defaultConfig);
   if (typeof doc !== "object" || doc === null) return cfg;
+  const assign = (row: SchemaRow, value: unknown): void => {
+    if (row.section === "theme") (cfg.theme as Record<string, unknown>)[row.prop] = value;
+    else if (row.section === "keys") (cfg.keys as Record<string, unknown>)[row.prop] = value;
+    else (cfg.ui as Record<string, unknown>)[row.prop] = value;
+  };
   for (const row of SCHEMA) {
     const section = (doc as Record<string, unknown>)[row.section];
     if (typeof section !== "object" || section === null) continue;
     const raw = (section as Record<string, unknown>)[row.tomlKey];
-    if (raw === undefined) continue;
-    const { ok, value } = coerceRow(row, raw);
-    if (!ok) continue;
-    if (row.section === "theme") (cfg.theme as Record<string, unknown>)[row.prop] = value;
-    else if (row.section === "keys") (cfg.keys as Record<string, unknown>)[row.prop] = value;
-    else (cfg.ui as Record<string, unknown>)[row.prop] = value;
-  }
-  // renamed key: the old `word-wrap` bool migrates to `wrap-mode`
-  // (true = char, false = none) and only applies when the new key is
-  // absent, so existing configs keep working through the rename.
-  // same-key type change: `transparent-bg` was a bool (true = transparent,
-  // false = opaque); a boolean value migrates to the matching enum member.
-  const uiSection = (doc as Record<string, unknown>).ui;
-  if (typeof uiSection === "object" && uiSection !== null) {
-    const raw = uiSection as Record<string, unknown>;
-    if (raw["wrap-mode"] === undefined) {
-      if (raw["word-wrap"] === true) cfg.ui.wrapMode = "char";
-      else if (raw["word-wrap"] === false) cfg.ui.wrapMode = "none";
+    const coerced = raw === undefined ? null : coerceRow(row, raw);
+    if (coerced?.ok) {
+      assign(row, coerced.value);
+      continue;
     }
-    if (raw["transparent-bg"] === true) cfg.ui.transparentBg = "on";
-    else if (raw["transparent-bg"] === false) cfg.ui.transparentBg = "off";
-    // same-key type change: `sidebar-title` was a bool (true = logo, false =
-    // none); a boolean value migrates to the matching mode.
-    if (raw["sidebar-title"] === true) cfg.ui.sidebarTitle = "tfm";
-    else if (raw["sidebar-title"] === false) cfg.ui.sidebarTitle = "none";
-    // the first enum spelling (opaque/transparent) never shipped a release but
-    // may sit in a hand-edited config — alias it instead of dropping to default
-    else if (raw["transparent-bg"] === "opaque") cfg.ui.transparentBg = "off";
-    else if (raw["transparent-bg"] === "transparent") cfg.ui.transparentBg = "on";
+    // the row's own value was ABSENT (a renamed key) or REJECTED (a legacy
+    // spelling of the same key) — the row's declared legacy spelling may
+    // answer instead.
+    const migrated = migrateRow(row, section as Record<string, unknown>);
+    if (!migrated) continue;
+    assign(row, migrated.value);
   }
   return cfg;
 }
