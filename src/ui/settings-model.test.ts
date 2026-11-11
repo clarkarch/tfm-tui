@@ -5,6 +5,7 @@ import path from "node:path";
 import { makeSettingModel, type SettingsModelCtx } from "./settings-model";
 import { defaultConfig, GATED_MASTERS, KEY_SCHEMA, UI_SCHEMA, type Config } from "../config/config-schema";
 import { THEME_PRESETS } from "../config/themes";
+import { presetKeys } from "../config/keymap-presets";
 import { makePluginStore } from "../plugins/plugins";
 import type { LoadedPlugin } from "../plugins/plugin-api";
 import type { SettingGroup, SettingRow } from "./settings";
@@ -505,6 +506,18 @@ describe("settingGroups shape", () => {
     const row = h.byLabel("keymap preset");
     if (row.kind !== "cycle") throw new Error("keymap preset must be a cycle");
     expect(row.get()).toEqual({ kind: "custom", label: "custom" });
+  });
+
+  test("keymap preset row reports the preset's index (the identity is a name)", () => {
+    // The preset's identity is a NAME ("tfm"/"yazi"); the row maps it to the
+    // index of the names list — the ONE order (the names array), never a
+    // hand-written index beside it.
+    const h = mk();
+    const row = h.byLabel("keymap preset");
+    if (row.kind !== "cycle") throw new Error("keymap preset must be a cycle");
+    expect(row.get()).toEqual({ kind: "index", index: 0 });
+    h.config.keys = presetKeys("yazi");
+    expect(row.get()).toEqual({ kind: "index", index: 1 });
   });
 
   test("terminal height stepper commits through the ui patch", () => {

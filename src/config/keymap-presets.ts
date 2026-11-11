@@ -91,13 +91,20 @@ const sameBinds = (a: string[], b: string[]): boolean => {
   return [...a].sort().every((s, i) => s === sb[i]);
 };
 
-// 0 = tfm, 1 = yazi, -1 = hand-edited (settings row shows "custom")
-export const keymapPresetIdx = (keys: Partial<Record<KeyAction, string[]>>): number => {
-  const names: KeymapPreset[] = [...KEYMAP_PRESET_NAMES];
-  // index + value from one iteration: no indexed read to assert
-  for (const [i, name] of names.entries()) {
+// the preset's IDENTITY — a NAME, not an index. The old shape answered a
+// NUMBER with -1 for "hand-edited" (the settings row showed "custom"): that
+// is EXACTLY the value the cursor arithmetic uses for "no selection", so a
+// cursor path that ever fed a preset index produced a silent "custom" — and
+// `KEYMAP_PRESET_NAMES[-1]` was `undefined`, guarded only at the call site.
+// The state is TAGGED: a named preset, or a keymap that matches none.
+export type KeymapPresetState = { kind: "preset"; name: KeymapPreset } | { kind: "custom" };
+
+export const keymapPresetOf = (keys: Partial<Record<KeyAction, string[]>>): KeymapPresetState => {
+  for (const name of KEYMAP_PRESET_NAMES) {
     const table = presetKeys(name);
-    if ((Object.keys(table) as KeyAction[]).every((a) => sameBinds(keys[a] ?? [], table[a]))) return i;
+    if ((Object.keys(table) as KeyAction[]).every((a) => sameBinds(keys[a] ?? [], table[a]))) {
+      return { kind: "preset", name };
+    }
   }
-  return -1;
+  return { kind: "custom" };
 };

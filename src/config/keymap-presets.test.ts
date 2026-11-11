@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { parse } from "smol-toml";
 import { KEY_SCHEMA, defaultConfig, keybindConflict, parseConfigDoc, serializeConfig } from "./config-schema";
 import { parseKeySpec } from "./keyspec";
-import { PRESET_VIEW_MODE, keymapPresetIdx, presetKeys, yaziKeys } from "./keymap-presets";
+import { PRESET_VIEW_MODE, keymapPresetOf, presetKeys, yaziKeys } from "./keymap-presets";
 
 describe("keymap presets", () => {
   test("tfm preset equals the schema defaults", () => {
@@ -48,10 +48,20 @@ describe("keymap presets", () => {
     expect(PRESET_VIEW_MODE).toEqual({ tfm: "grid", yazi: "list" });
   });
 
-  test("keymapPresetIdx recognizes both tables, -1 for hand edits", () => {
-    expect(keymapPresetIdx(presetKeys("tfm"))).toBe(0);
-    expect(keymapPresetIdx(presetKeys("yazi"))).toBe(1);
-    expect(keymapPresetIdx({ ...presetKeys("tfm"), quit: ["ctrl+q", "q"] })).toBe(-1);
+  test("a custom keymap reports 'custom', not an index", () => {
+    // The old shape answered a NUMBER with -1 for "custom" — the same value
+    // the cursor arithmetic uses for "no selection", so a cursor path that
+    // ever fed a preset index produced a silent "custom" (and
+    // KEYMAP_PRESET_NAMES[-1] was undefined, guarded only at the call
+    // site). The preset's IDENTITY is a NAME now, and "custom" is a state
+    // of its own.
+    expect(keymapPresetOf(presetKeys("tfm"))).toEqual({ kind: "preset", name: "tfm" });
+    expect(keymapPresetOf(presetKeys("yazi"))).toEqual({ kind: "preset", name: "yazi" });
+    const custom = keymapPresetOf({ ...presetKeys("tfm"), quit: ["ctrl+q", "q"] });
+    expect(custom).toEqual({ kind: "custom" });
+    // a custom state carries NO name — there is nothing to index with
+    // @ts-expect-error "custom" is not a preset
+    custom.name;
   });
 
   test("yazi preset round-trips a save+load: explicit unbinds survive", () => {
@@ -61,6 +71,6 @@ describe("keymap presets", () => {
     const cfg = { ...structuredClone(defaultConfig), keys: presetKeys("yazi") };
     const reloaded = parseConfigDoc(parse(serializeConfig(cfg)));
     expect(reloaded.keys).toEqual(cfg.keys);
-    expect(keymapPresetIdx(reloaded.keys)).toBe(1);
+    expect(keymapPresetOf(reloaded.keys)).toEqual({ kind: "preset", name: "yazi" });
   });
 });

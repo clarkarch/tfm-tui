@@ -82,6 +82,15 @@ export type SettingGroup = { header?: string; icon?: string; rows: SettingRow[] 
 // "~<nearest preset>", never a bare "custom")
 export type CycleSelection = { kind: "index"; index: number } | { kind: "custom"; label: string };
 
+// the ONE place the legacy "-1 = a value that matches no name" index
+// convention becomes the app's tagged selection. The convention is the
+// PLUGIN API's contract (a legacy cycle row answers an INDEX), so it cannot
+// change — but it is READ here and nowhere else: the panel and the adjust
+// path only ever see the tagged shape. `offset` maps a list index into the
+// row's names list (the theme row's presets sit at +1 — "System" leads).
+export const cycleSelectionFromIdx = (idx: number, customLabel?: () => string, offset = 0): CycleSelection =>
+  idx >= 0 ? { kind: "index", index: idx + offset } : { kind: "custom", label: customLabel?.() ?? "custom" };
+
 // outcome of a keybind capture commit (see the keybind row above)
 export type KeybindSetResult =
   | { status: "applied" }
@@ -139,10 +148,7 @@ export const normalizeSettingRow = (raw: unknown): SettingRow | null => {
   const customLabel = typeof row.customLabel === "function" ? (row.customLabel as () => string) : undefined;
   return {
     ...(raw as object),
-    get: () => {
-      const i = getIdx();
-      return i >= 0 ? { kind: "index", index: i } : { kind: "custom", label: customLabel?.() ?? "custom" };
-    },
+    get: () => cycleSelectionFromIdx(getIdx(), customLabel),
   } as SettingRow;
 };
 

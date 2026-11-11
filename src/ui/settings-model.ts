@@ -20,6 +20,7 @@ import {
   GATED_MASTERS,
   KEY_SCHEMA,
   UI_SCHEMA,
+  cycleSelectionFromIdx,
   gateAllows,
   keybindConflict,
   swapKeybind,
@@ -33,7 +34,7 @@ import {
   KEYMAP_PRESET_NAMES,
   PRESET_TYPE_TO_SEARCH,
   PRESET_VIEW_MODE,
-  keymapPresetIdx,
+  keymapPresetOf,
   presetKeys,
 } from "../config/keymap-presets";
 
@@ -247,8 +248,9 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
       get: () => {
         if (ctx.isTtyMode?.()) return { kind: "custom", label: customLabel() };
         if (ctx.config.ui.followTerminal) return { kind: "index", index: 0 };
-        const i = themePresetIdx();
-        return i < 0 ? { kind: "custom", label: customLabel() } : { kind: "index", index: i + 1 };
+        // the presets sit at +1 (the "System" entry leads the list) — the ONE
+        // helper that reads the legacy "-1 = no match" convention
+        return cycleSelectionFromIdx(themePresetIdx(), customLabel, 1);
       },
       setIdx: (i) => {
         if (ctx.isTtyMode?.()) {
@@ -352,37 +354,43 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
   // table + the type-to-search/view flips, like manual remaps (nothing
   // stashed). Leads the keys category outright (theme, appearance's other
   // hand row, rides that category's look header instead).
-  const keymapPresetRow = (): SettingRow => ({
-    kind: "cycle",
-    label: "keymap preset",
-    blurb: "tfm or yazi style shortcuts",
-    // repaint: one batch rewrites EVERY keybind row's value, so the panel
-    // must rebuild (afterAdjust only repaints the adjusted row itself —
-    // without this the new binds appear only as rows scroll into view)
-    repaint: true,
-    names: [...KEYMAP_PRESET_NAMES],
-    get: () => {
-      const i = keymapPresetIdx(ctx.config.keys);
-      // hand-edited binds match no preset — the row says so instead of
-      // answering a magic index
-      return i >= 0 ? { kind: "index", index: i } : { kind: "custom", label: "custom" };
-    },
-    setIdx: (i) => {
-      const name = KEYMAP_PRESET_NAMES[i];
-      if (name === undefined) return;
-      commit({
-        ui: { ...ctx.config.ui, typeToSearch: PRESET_TYPE_TO_SEARCH[name], viewMode: PRESET_VIEW_MODE[name] },
-        theme: { ...ctx.config.theme },
-        keys: presetKeys(name),
-      });
-      ctx.warn(
-        name === "yazi"
-          ? "yazi keymap on · list view, hjkl move, space toggles, q quits, / searches"
-          : "tfm keymap on · grid view, type-to-search restored",
-        "keymap preset",
-      );
-    },
-  });
+  const keymapPresetRow = (): SettingRow => {
+    // the names list IS the order — the preset's identity is a NAME and the
+    // row maps it to a position in THIS list (never a hand-written index
+    // beside it).
+    const names = [...KEYMAP_PRESET_NAMES];
+    return {
+      kind: "cycle",
+      label: "keymap preset",
+      blurb: "tfm or yazi style shortcuts",
+      // repaint: one batch rewrites EVERY keybind row's value, so the panel
+      // must rebuild (afterAdjust only repaints the adjusted row itself —
+      // without this the new binds appear only as rows scroll into view)
+      repaint: true,
+      names,
+      get: () => {
+        const preset = keymapPresetOf(ctx.config.keys);
+        if (preset.kind === "custom") return { kind: "custom", label: "custom" };
+        const i = names.indexOf(preset.name);
+        return i < 0 ? { kind: "custom", label: "custom" } : { kind: "index", index: i };
+      },
+      setIdx: (i) => {
+        const name = KEYMAP_PRESET_NAMES[i];
+        if (name === undefined) return;
+        commit({
+          ui: { ...ctx.config.ui, typeToSearch: PRESET_TYPE_TO_SEARCH[name], viewMode: PRESET_VIEW_MODE[name] },
+          theme: { ...ctx.config.theme },
+          keys: presetKeys(name),
+        });
+        ctx.warn(
+          name === "yazi"
+            ? "yazi keymap on · list view, hjkl move, space toggles, q quits, / searches"
+            : "tfm keymap on · grid view, type-to-search restored",
+          "keymap preset",
+        );
+      },
+    };
+  };
 
   // keys category: same subsection-divider mechanism as genericUiRows —
   // one header row where the schema subsection changes (first section leads

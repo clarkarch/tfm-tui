@@ -4,6 +4,7 @@ import {
   KEY_SCHEMA,
   SCHEMA,
   UI_SCHEMA,
+  cycleSelectionFromIdx,
   defaultConfig,
   describeKeybindConflicts,
   exampleToml,
@@ -553,6 +554,18 @@ describe("plugin settings rows", () => {
     });
     if (row?.kind !== "cycle") throw new Error("expected a cycle row");
     expect(row.get()).toEqual({ kind: "index", index: 0 });
+  });
+
+  test("the legacy -1 index becomes a tagged selection through ONE helper", () => {
+    // The "-1 = custom" convention is the PLUGIN API's contract (it cannot
+    // change), so the sentinel is READ in exactly ONE place — the helper.
+    // The app's own rows never speak it: they answer the tagged selection.
+    expect(cycleSelectionFromIdx(-1)).toEqual({ kind: "custom", label: "custom" });
+    expect(cycleSelectionFromIdx(-1, () => "~nearest")).toEqual({ kind: "custom", label: "~nearest" });
+    expect(cycleSelectionFromIdx(1)).toEqual({ kind: "index", index: 1 });
+    // the theme row's presets sit at +1 (the "System" entry leads at 0)
+    expect(cycleSelectionFromIdx(0, undefined, 1)).toEqual({ kind: "index", index: 1 });
+    expect(cycleSelectionFromIdx(-1, () => "~nearest", 1)).toEqual({ kind: "custom", label: "~nearest" });
   });
 
   test("a malformed row is still dropped", () => {
