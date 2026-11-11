@@ -10,25 +10,35 @@ import type { Place } from "../fs/places";
 import type { LoadedPlugin } from "../plugins/plugin-api";
 
 // full-shape fakes (absent builders are null, never undefined — matches what
-// the loader hands out, so the guards are exercised exactly as in prod)
-const fakePlugin = (over: Partial<LoadedPlugin> & { name: string }): LoadedPlugin => ({
-  version: "",
-  author: "",
-  description: "",
-  rows: [],
-  fileMenu: null,
-  sidebarMenu: null,
-  emptyAreaMenu: null,
-  commands: [],
-  preview: [],
-  store: {
+// the loader hands out, so the guards are exercised exactly as in prod).
+// `enabled` mirrors the REAL contract: a live projection of the plugin's
+// store (the store owns the flag), so a fake with a throwing store reads
+// exactly like the loader's.
+const fakePlugin = (over: Partial<LoadedPlugin> & { name: string }): LoadedPlugin => {
+  const store = over.store ?? {
     get: (_k: string, fb: unknown) => fb as never,
     set: () => {},
-  },
-  deactivate: null,
-  file: `/fake/${over.name}.ts`,
-  ...over,
-});
+  };
+  return {
+    version: "",
+    author: "",
+    description: "",
+    rows: [],
+    fileMenu: null,
+    sidebarMenu: null,
+    emptyAreaMenu: null,
+    commands: [],
+    preview: [],
+    deactivate: null,
+    slotRegistration: { kind: "none" },
+    file: `/fake/${over.name}.ts`,
+    ...over,
+    store,
+    get enabled() {
+      return store.get("enabled", true);
+    },
+  };
+};
 
 const TRASH_FILES = path.join(trashDir(), "files");
 

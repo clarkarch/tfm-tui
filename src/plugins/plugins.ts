@@ -35,6 +35,7 @@ import { validateKeybindSpec } from "../config/keyspec";
 import {
   PLUGIN_API_VERSION,
   PLUGIN_NAME_RE,
+  isPluginEnabled,
   type LoadedPlugin,
   type PluginApi,
   type PluginCommand,
@@ -304,10 +305,13 @@ type PluginRegistry = {
   // async IO), so the returned promises are NOT awaited — only a deactivate's
   // sync prefix runs. Remove/reload use the awaited path below.
   deactivateAll: () => void;
-  // Plugins-view on/off: register/unregister the named plugin's slots so a
-  // disabled plugin stops contributing UI immediately (store flag is written
-  // by the caller). No-op for unknown names / plugins with no slots.
-  setSlotEnabled: (name: string, enabled: boolean) => void;
+  // Plugins-view on/off — ONE transition. The plugin's STORE owns the flag
+  // (the write lives here); the slot registration is DERIVED from it, so a
+  // disabled plugin stops contributing UI immediately and the two can never
+  // disagree. The old shape wrote the store in the settings model and
+  // unregistered the slots in a separate call: a failure between the two
+  // left a disabled plugin painting UI. No-op for unknown names.
+  setEnabled: (name: string, enabled: boolean) => void;
 };
 
 // one discoverable plugin: folders are canonical (<name>/<name>.ts), legacy
@@ -475,12 +479,18 @@ export const makePluginRegistry = (deps: {
     // namespaced store: every plugin gets ONLY its own store, whatever name
     // it asks for (cross-plugin state reads warn and return the caller's own).
     const ownStore = storeFor(m.name);
+    // The live enable flag. The STORE owns the value (it is mtime-checked, so
+    // an external edit reflects immediately); this read is the ONE surface
+    // every consumer goes through. A throwing read PROPAGATES here — each
+    // reader picks its own degrade policy (the push/veto gate degrades to
+    // "on", the settings model warns, the filters degrade to "on").
+    const readEnabled = (): boolean => ownStore.get("enabled", true);
     // live enabled read for the push/veto channels: a plugin toggled off in
     // the Plugins view must stop receiving events and stop vetoing file ops
     // immediately, not next restart. A throwing store read degrades to on.
     const pluginOn = (): boolean => {
       try {
-        return ownStore.get("enabled", true);
+        return readEnabled();
       } catch {
         return true;
       }
@@ -517,7 +527,6 @@ export const makePluginRegistry = (deps: {
       typeof (mod as { deactivate?: unknown }).deactivate === "function"
         ? (mod as { deactivate: () => void | Promise<void> }).deactivate
         : null;
-    let disposeSlots: (() => void) | null = null;
     try {
       // a hanging activate must not stall the whole rescan (esc-menu reload
       // would never settle) — 10s cap, timer cleaned up via withTimeout.
@@ -618,17 +627,11 @@ export const makePluginRegistry = (deps: {
           }
           clean[key] = val;
         }
-        // register only when enabled; a disabled plugin's slots are retained on
-        // the LoadedPlugin so re-enabling can register without a re-activate
-        if (pluginOn() && registerSlots && Object.keys(clean).length) {
-          try {
-            disposeSlots = registerSlots(m.name, clean);
-          } catch (err) {
-            try {
-              api.log(`plugin ${m.name} slots failed to register: ${errMessage(err)}`);
-            } catch {}
-          }
-        }
+        // The slots are NOT registered here: the registration is DERIVED from
+        // the plugin's enable flag by the registry (syncSlots), so the load
+        // path and the toggle path share ONE derivation. A disabled plugin's
+        // contributions are retained on the LoadedPlugin, so re-enabling
+        // registers them without a re-activate.
       }
       const rawRows = result.rows ?? [];
       if (!Array.isArray(rawRows)) throw new Error(`rows must be an array`);
@@ -662,15 +665,24 @@ export const makePluginRegistry = (deps: {
         preview,
         store: ownStore,
         deactivate,
-        disposeSlots,
+        // the live enable flag — a PROJECTION of the store (the owner). The
+        // read propagates a broken store to the reader, which picks its own
+        // degrade policy.
+        get enabled() {
+          return readEnabled();
+        },
+        // the slot registration starts EMPTY: the registry derives it from the
+        // flag (syncSlots) once the plugin is live.
+        slotRegistration: { kind: "none" },
         slots: Object.keys(clean).length ? clean : null,
         file: originalFile,
       };
     } catch (err) {
       // activate already ran (or the post-activate validation threw): tear the
-      // partial instance down or its listeners/timers/slots leak forever — it
-      // is never pushed to `plugins`, so deactivateAll can't reach it.
-      await tearPartial(disposeSlots, deactivate);
+      // partial instance down or its listeners/timers leak forever — it is
+      // never pushed to `plugins`, so deactivateAll can't reach it. (Its slots
+      // were never registered: the registration is derived after the load.)
+      await tearPartial(deactivate);
       throw err;
     }
   };
@@ -680,13 +692,9 @@ export const makePluginRegistry = (deps: {
   // timeout handle on success and holds the event loop per unload). Shared by
   // runDeactivate and loadOne's post-activate-validation catch.
   const tearPartial = async (
-    disposeSlots: (() => void) | null | undefined,
     deactivate: (() => unknown) | null | undefined,
     log?: (err: unknown) => void,
   ): Promise<void> => {
-    try {
-      disposeSlots?.();
-    } catch {}
     if (!deactivate) return;
     try {
       await withTimeout(
@@ -698,8 +706,81 @@ export const makePluginRegistry = (deps: {
     }
   };
 
+  // The slot registration is DERIVED from the plugin's enable flag: enabled +
+  // contributions => registered; otherwise nothing is registered. ONE
+  // derivation for the load path and the toggle path — the old shape
+  // registered inside the load and toggled through a separate call (two
+  // writers of one fact).
+  const syncSlots = (p: LoadedPlugin): void => {
+    const wants = isPluginEnabled(p) && !!p.slots && Object.keys(p.slots).length > 0;
+    const reg = p.slotRegistration;
+    if (wants) {
+      if (reg.kind === "registered") return;
+      if (!registerSlots || !p.slots) return;
+      try {
+        p.slotRegistration = { kind: "registered", dispose: registerSlots(p.name, p.slots) };
+      } catch (err) {
+        p.slotRegistration = { kind: "none" };
+        try {
+          api.log(`plugin ${p.name} slots failed to register: ${errMessage(err)}`);
+        } catch {}
+      }
+      return;
+    }
+    if (reg.kind !== "registered") return;
+    try {
+      reg.dispose();
+    } catch (err) {
+      // the state advances only on SUCCESS: a failed unregister KEEPS the
+      // handle, so the next enable cannot register a SECOND copy of the same
+      // contribution (the old shape dropped the handle and leaked one).
+      try {
+        api.log(`plugin ${p.name} slots failed to unregister: ${errMessage(err)}`);
+      } catch {}
+      return;
+    }
+    p.slotRegistration = { kind: "none" };
+  };
+
+  // Dispose a plugin's slot registration. A failed dispose keeps the handle
+  // (the state advances only on success) — and the plugin is remembered so
+  // the registry can RETRY it: a lost handle leaks the contribution for the
+  // rest of the session.
+  const pendingDisposals: LoadedPlugin[] = [];
+  const disposeSlotsOf = (p: LoadedPlugin): void => {
+    const reg = p.slotRegistration;
+    if (reg.kind !== "registered") return;
+    try {
+      reg.dispose();
+    } catch (err) {
+      try {
+        api.log(`plugin ${p.name} slots failed to unregister: ${errMessage(err)}`);
+      } catch {}
+      if (!pendingDisposals.includes(p)) pendingDisposals.push(p);
+      return;
+    }
+    p.slotRegistration = { kind: "none" };
+  };
+  const flushPendingDisposals = (): void => {
+    for (const p of [...pendingDisposals]) {
+      const reg = p.slotRegistration;
+      if (reg.kind !== "registered") {
+        pendingDisposals.splice(pendingDisposals.indexOf(p), 1);
+        continue;
+      }
+      try {
+        reg.dispose();
+      } catch {
+        continue; // keep it for the next try
+      }
+      p.slotRegistration = { kind: "none" };
+      pendingDisposals.splice(pendingDisposals.indexOf(p), 1);
+    }
+  };
+
   const runDeactivate = async (p: LoadedPlugin): Promise<void> => {
-    await tearPartial(p.disposeSlots, p.deactivate, (err) => {
+    disposeSlotsOf(p);
+    await tearPartial(p.deactivate, (err) => {
       try {
         api.log(`plugin ${p.name} deactivate failed: ${errMessage(err)}`);
       } catch {}
@@ -710,10 +791,9 @@ export const makePluginRegistry = (deps: {
   // sync prefix flushes before process.exit. Async cleanup must use
   // events.on("quit") — see docs/plugins.md.
   const deactivateAll = (): void => {
+    flushPendingDisposals();
     for (const p of [...plugins]) {
-      try {
-        p.disposeSlots?.();
-      } catch {}
+      disposeSlotsOf(p);
       if (!p.deactivate) continue;
       try {
         const r = p.deactivate();
@@ -727,6 +807,9 @@ export const makePluginRegistry = (deps: {
   };
 
   const doScan = async (): Promise<PluginScanDiff> => {
+    // a plugin whose unregister failed keeps its handle — retry the
+    // disposal before anything else (a lost handle leaks the contribution)
+    flushPendingDisposals();
     // one failed-load recorder: prune the staged dir (given), record + warn
     // once per distinct content version (a repeat failure dedupes silently
     // else). The dedupe key is the FILE's: the file owns the versions it has
@@ -832,6 +915,9 @@ export const makePluginRegistry = (deps: {
           const staged = copyStagedPlugin(srcFolder, folderName, hash, mainBase);
           const lp = await loadOne(staged, file, (name) => nameTakenByOther(file, name));
           plugins.push(lp);
+          // the slot registration is DERIVED from the flag (the same
+          // derivation the toggle uses)
+          syncSlots(lp);
           snaps.set(file, { state: "loaded", fp, hash });
           diff.added.push(lp.name);
         } catch (err) {
@@ -856,6 +942,9 @@ export const makePluginRegistry = (deps: {
         const idx = plugins.indexOf(current);
         await runDeactivate(current);
         plugins.splice(idx, 1, lp);
+        // the new instance's registration is derived from the flag (the old
+        // one was disposed with the old instance)
+        syncSlots(lp);
         snaps.set(file, { state: "loaded", fp, hash });
         diff.changed.push(lp.name);
         try {
@@ -890,30 +979,18 @@ export const makePluginRegistry = (deps: {
     return scanning;
   };
 
-  // Plugins-view enable/disable: register or unregister a plugin's slots so a
-  // toggled-off plugin stops contributing UI immediately (registering only at
-  // load would leave its slot live until restart). Store writes stay with the
-  // caller (settings-model owns the flag).
-  const setSlotEnabled = (name: string, enabled: boolean): void => {
+  // Plugins-view enable/disable — ONE transition. The plugin's STORE owns the
+  // flag (the write lives HERE, not in the settings model) and the slot
+  // registration is DERIVED from it, so the flag and the UI can never
+  // disagree: a disabled plugin stops contributing UI immediately, and a
+  // failed store write leaves BOTH as they were (the old shape wrote the
+  // store in the model and unregistered the slots in a separate call).
+  const setEnabled = (name: string, enabled: boolean): void => {
     const p = plugins.find((x) => x.name === name);
     if (!p) return;
-    if (!enabled) {
-      try {
-        p.disposeSlots?.();
-      } catch {}
-      p.disposeSlots = null;
-      return;
-    }
-    if (!p.disposeSlots && registerSlots && p.slots && Object.keys(p.slots).length) {
-      try {
-        p.disposeSlots = registerSlots(p.name, p.slots);
-      } catch (err) {
-        try {
-          api.log(`plugin ${p.name} slots failed to register: ${errMessage(err)}`);
-        } catch {}
-      }
-    }
+    p.store.set("enabled", enabled); // the owner write — throws => nothing changed
+    syncSlots(p);
   };
 
-  return { plugins, errors, scan, deactivateAll, setSlotEnabled };
+  return { plugins, errors, scan, deactivateAll, setEnabled };
 };

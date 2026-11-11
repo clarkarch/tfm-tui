@@ -172,15 +172,24 @@ export const setPluginCommandBinds = (plugin: LoadedPlugin, cmdId: string, binds
 
 // the Plugins-view on/off toggle is a REAL disable, not just row hiding: the
 // action surfaces (keybinds, menus, previews, slots) and the push/veto channels
-// all consult this. A store read that throws degrades to enabled (a broken
-// state file must not silently kill a plugin).
-export const isPluginEnabled = (plugin: { store: PluginStore }): boolean => {
+// all consult this. The plugin's STORE owns the flag (it is mtime-checked, so
+// an external edit reflects immediately); `enabled` is the ONE read surface.
+// A throwing read degrades to enabled (a broken state file must not silently
+// kill a plugin).
+export const isPluginEnabled = (plugin: { enabled: boolean }): boolean => {
   try {
-    return plugin.store.get("enabled", true);
+    return plugin.enabled;
   } catch {
     return true;
   }
 };
+
+// A plugin's slot registration — ONE tagged record. The old shape was a
+// nullable fn with THREE meanings (undefined = "never had slots", null =
+// "disposed", fn = "registered") — two of them nullish, and the "disposed"
+// spelling lost the handle, so a failed unregister let the next enable
+// register a SECOND copy of the same contribution.
+export type SlotRegistration = { kind: "none" } | { kind: "registered"; dispose: () => void };
 
 // plugin-contributed commands as dispatchable Command[] (hint falls back to
 // "" — most plugin commands carry no bind); core table comes first at callers
@@ -205,9 +214,15 @@ export type LoadedPlugin = {
   preview: PluginPreview[];
   store: PluginStore;
   deactivate: (() => void | Promise<void>) | null;
-  // slot contributions' unregister (set when the plugin returned `slots`);
-  // called on reload/remove/quit so registry entries never leak
-  disposeSlots?: (() => void) | null;
+  // the live enable flag — a PROJECTION of the plugin's store (the store
+  // owns the value). A throwing store read propagates: every reader decides
+  // its own degrade policy (the filters degrade to "enabled", the settings
+  // model warns).
+  readonly enabled: boolean;
+  // the plugin's slot registration — the registry owns the transition: the
+  // registration is DERIVED from `enabled` (a disabled plugin contributes
+  // no UI).
+  slotRegistration: SlotRegistration;
   // the accepted slot contributions (retained so a re-enabled plugin can
   // re-register without re-running activate)
   slots?: Record<string, unknown> | null;

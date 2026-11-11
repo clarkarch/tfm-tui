@@ -34,6 +34,13 @@ const mk = (plugins?: () => LoadedPlugin[], over: Partial<SettingsModelCtx> = {}
     warn: (message, title) => {
       warns.push({ message, title });
     },
+    // the flag's owner (the plugin registry in prod): it writes the plugin's
+    // store and derives the slot registration from it. The fake mirrors that
+    // ONE write — the model must never write the store itself.
+    onPluginEnabledChanged: (name, enabled) => {
+      const p = plugins?.().find((x) => x.name === name);
+      p?.store.set("enabled", enabled);
+    },
     ...(plugins ? { plugins } : {}),
     ...over,
   };
@@ -48,24 +55,34 @@ const mk = (plugins?: () => LoadedPlugin[], over: Partial<SettingsModelCtx> = {}
   return { ctx, config, state, applied, warns, model, groups, rows, byLabel, saves: () => saves };
 };
 
-const mkPlugin = (over: Partial<LoadedPlugin> & { name: string }): LoadedPlugin => ({
-  version: "",
-  author: "",
-  description: "",
-  rows: [],
-  fileMenu: null,
-  sidebarMenu: null,
-  emptyAreaMenu: null,
-  commands: [],
-  preview: [],
-  store: {
+// `enabled` mirrors the REAL contract: a live projection of the plugin's
+// store (the store owns the flag), so a fake with a throwing store reads
+// exactly like the loader's (a plain field would hide it).
+const mkPlugin = (over: Partial<LoadedPlugin> & { name: string }): LoadedPlugin => {
+  const store = over.store ?? {
     get: (_k: string, fb: unknown) => fb as never,
     set: () => {},
-  },
-  deactivate: null,
-  file: `/fake/${over.name}.ts`,
-  ...over,
-});
+  };
+  return {
+    version: "",
+    author: "",
+    description: "",
+    rows: [],
+    fileMenu: null,
+    sidebarMenu: null,
+    emptyAreaMenu: null,
+    commands: [],
+    preview: [],
+    deactivate: null,
+    slotRegistration: { kind: "none" },
+    file: `/fake/${over.name}.ts`,
+    ...over,
+    store,
+    get enabled() {
+      return store.get("enabled", true);
+    },
+  };
+};
 
 type MkHarness = ReturnType<typeof mk>;
 
@@ -619,8 +636,14 @@ describe("settingGroups shape", () => {
     try {
       const hello: SettingRow = { kind: "action", label: "Say hello", run: () => {} };
       const enabledChanges: Array<[string, boolean]> = [];
-      const h = mk(() => [mkPlugin({ name: "hello", rows: [hello], store: makePluginStore(dir, "hello") })], {
-        onPluginEnabledChanged: (name, enabled) => enabledChanges.push([name, enabled]),
+      const plug = mkPlugin({ name: "hello", rows: [hello], store: makePluginStore(dir, "hello") });
+      const h = mk(() => [plug], {
+        onPluginEnabledChanged: (name, enabled) => {
+          enabledChanges.push([name, enabled]);
+          // the OWNER writes the flag (the registry's job in prod) — the fake
+          // mirrors that, so the rows hide the way they do in the app
+          plug.store.set("enabled", enabled);
+        },
       });
       const toggle = h.model.pluginGroups().find((g) => g.header === "hello")!.rows[0]!;
       if (toggle.kind !== "toggle") throw new Error("first plugin row must be the enabled toggle");
@@ -646,6 +669,33 @@ describe("settingGroups shape", () => {
         ["hello", false],
         ["hello", true],
       ]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a toggle whose owner fails leaves the flag unchanged", () => {
+    // The flag has ONE owner (the plugin registry): the model must NOT write
+    // the store itself. The old shape wrote the store here and updated the
+    // slots in a separate registry call — when the owner call failed, the
+    // flag had already moved and the plugin was half-disabled (the store
+    // said off while its UI kept painting).
+    const dir = mkdtempSync(path.join(os.tmpdir(), "tfm-model-plugins-"));
+    try {
+      const plug = mkPlugin({ name: "hello", store: makePluginStore(dir, "hello") });
+      const h = mk(() => [plug], {
+        onPluginEnabledChanged: () => {
+          throw new Error("owner-boom");
+        },
+      });
+      const toggle = h.model.pluginGroups().find((g) => g.header === "hello")!.rows[0]!;
+      if (toggle.kind !== "toggle") throw new Error("first plugin row must be the enabled toggle");
+      expect(toggle.get()).toBe(true);
+      // the owner call fails — the toggle degrades (no throw escapes) …
+      expect(() => toggle.set(false)).not.toThrow();
+      // … and the flag never moved
+      expect(toggle.get()).toBe(true);
+      expect(h.warns.length).toBeGreaterThan(0);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

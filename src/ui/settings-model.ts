@@ -53,10 +53,13 @@ export type SettingsModelCtx = {
   // code compiled into it). The Plugins entry disappears entirely — the
   // installer category included, since a plugin could never load.
   pluginsDisabled?: boolean;
-  // fired after the on/off toggle writes the store: the wiring re-registers or
-  // drops the plugin's UI slots and repaints (the store flag alone only feeds
-  // the action-surface filters, which read it lazily). Optional for tests.
-  onPluginEnabledChanged?(name: string, enabled: boolean): void;
+  // fired when the on/off toggle flips: the REGISTRY owns the flag (it
+  // writes the plugin's store and derives the slot registration from it), so
+  // the model never writes the store itself — a half-applied flag (the store
+  // says off while the plugin keeps painting) is not representable. The
+  // wiring re-registers or drops the plugin's UI slots and repaints.
+  // REQUIRED: a toggle without its owner could only half-apply the flag.
+  onPluginEnabledChanged(name: string, enabled: boolean): void;
   // system-theme resolve (terminal query → applyConfig): fired when the user
   // picks the System theme entry. Optional so row SHAPE stays testable
   // without it; absent = flag commits, derived colors land on next boot.
@@ -537,13 +540,13 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
   // one category per installed plugin, each led by its on/off toggle. The
   // toggle is `repaint` so flipping it rebuilds the panel live (rows vanish
   // or appear without a restart); the toggle itself always stays so a
-  // disabled plugin can be re-enabled. Reads the store on every build, so
-  // the rows always reflect the persisted flag. A throwing store/row never
-  // breaks the other plugins' categories — that plugin degrades to its
-  // toggle alone (or enabled=true when even the flag read fails).
+  // disabled plugin can be re-enabled. Reads the flag live (the plugin's
+  // store owns it), so the rows always reflect the persisted value. A
+  // throwing read degrades to enabled (a broken state file must not silently
+  // kill a plugin) — and the other plugins' categories stay intact.
   const safeEnabled = (p: LoadedPlugin): boolean => {
     try {
-      return p.store.get("enabled", true);
+      return p.enabled;
     } catch (err) {
       try {
         ctx.warn(`plugin ${p.name} store failed: ${errMessage(err)}`, "plugins");
@@ -641,9 +644,13 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
           repaint: true,
           get: () => safeEnabled(p),
           set: (v) => {
+            // The flag has ONE owner (the plugin registry): the model asks it
+            // to apply the change and does NOT write the store itself. A
+            // failed owner call leaves the flag untouched (the old shape
+            // wrote the store here, so a failed slot update left the plugin
+            // half-disabled).
             guardedRun(`plugin ${p.name} store failed`, () => {
-              p.store.set("enabled", v);
-              ctx.onPluginEnabledChanged?.(p.name, v);
+              ctx.onPluginEnabledChanged(p.name, v);
             });
           },
         };

@@ -338,7 +338,7 @@ export const wirePlugins = async (deps: {
     beginBootPaint: bootPaint.beginPaint,
     endBootPaint: bootPaint.endPaint,
     // Plugins-view on/off: register/unregister that plugin's slots immediately
-    setSlotEnabled: registry.setSlotEnabled,
+    setEnabled: registry.setEnabled,
     // UI slots: mount after the boot layout exists; refresh with renderAll so
     // contributions see fresh cwd/selection
     slotRegistry,

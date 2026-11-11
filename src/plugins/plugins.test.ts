@@ -1227,6 +1227,119 @@ describe("slot contributions (loader bridge)", () => {
     }
   });
 
+  test("a disabled plugin's slots are unregistered", async () => {
+    // The flag and the slots are ONE transition: the plugin's store owns the
+    // flag, the slot registration is DERIVED from it. The old shape wrote the
+    // store in the settings model and unregistered the slots in a separate
+    // registry call — the two could disagree, and a disabled plugin kept
+    // painting UI.
+    const dir = mkDir();
+    const registered: string[] = [];
+    const disposed: string[] = [];
+    try {
+      writePlugin(
+        dir,
+        "bars.ts",
+        `export default { name: "bars", activate: () => ({ slots: { statusbar: () => null } }) };\n`,
+      );
+      const reg = makePluginRegistry({
+        dir,
+        api: mkApi(dir, []),
+        warn: () => {},
+        registerSlots: (name, slots) => {
+          registered.push(`${name}:${Object.keys(slots).join(",")}`);
+          return () => disposed.push(name);
+        },
+      });
+      await reg.scan();
+      expect(registered).toEqual(["bars:statusbar"]);
+      // toggling off moves BOTH: the flag's owner (the store) says off …
+      reg.setEnabled("bars", false);
+      expect(reg.plugins[0]!.enabled).toBe(false);
+      // … and the registration is gone (ONE tagged state, not a nullable fn)
+      expect(disposed).toEqual(["bars"]);
+      expect(reg.plugins[0]!.slotRegistration.kind).toBe("none");
+      // toggling back on brings the slots with the flag
+      reg.setEnabled("bars", true);
+      expect(reg.plugins[0]!.enabled).toBe(true);
+      expect(registered).toEqual(["bars:statusbar", "bars:statusbar"]);
+      expect(reg.plugins[0]!.slotRegistration.kind).toBe("registered");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("toggling twice does not leak a registration", async () => {
+    // The unregister handle was DROPPED even when the unregister THREW (the
+    // old shape nulled the handle after the call) → the next enable
+    // registered a SECOND copy and the plugin's UI painted twice. The state
+    // advances only on success: a failed dispose KEEPS the handle.
+    const dir = mkDir();
+    let registrations = 0;
+    try {
+      writePlugin(
+        dir,
+        "bars.ts",
+        `export default { name: "bars", activate: () => ({ slots: { statusbar: () => null } }) };\n`,
+      );
+      const reg = makePluginRegistry({
+        dir,
+        api: mkApi(dir, []),
+        warn: () => {},
+        registerSlots: () => {
+          registrations++;
+          return () => {
+            throw new Error("unregister-boom");
+          };
+        },
+      });
+      await reg.scan();
+      expect(registrations).toBe(1);
+      // off: the unregister fails — the handle is kept, so the next enable
+      // cannot register a second copy
+      reg.setEnabled("bars", false);
+      reg.setEnabled("bars", true);
+      expect(registrations).toBe(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a plugin whose unregister fails is retried (the handle is never lost)", async () => {
+    // The removal path drops the plugin object — a failed unregister would
+    // lose the handle with it and the contribution would stay in the UI
+    // registry forever. The registry keeps the plugin and retries.
+    const dir = mkDir();
+    let disposals = 0;
+    try {
+      writePlugin(
+        dir,
+        "bars.ts",
+        `export default { name: "bars", activate: () => ({ slots: { statusbar: () => null } }) };\n`,
+      );
+      const reg = makePluginRegistry({
+        dir,
+        api: mkApi(dir, []),
+        warn: () => {},
+        registerSlots: () => () => {
+          disposals++;
+          if (disposals === 1) throw new Error("unregister-boom");
+        },
+      });
+      await reg.scan();
+      expect(disposals).toBe(0);
+      // removing the plugin unregisters its slots — that unregister fails
+      rmSync(path.join(dir, "bars"), { recursive: true, force: true });
+      await reg.scan();
+      expect(disposals).toBe(1);
+      // the handle survived the removal: the next scan retries it
+      await reg.scan();
+      expect(disposals).toBe(2);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("a malformed slots field fails the plugin load", async () => {
     const dir = mkDir();
     try {

@@ -273,10 +273,11 @@ export const wireSettings = (deps: {
     // entry disappears instead of offering an install the build will not
     // run
     pluginsDisabled: !PLUGINS_ENABLED,
-    // on/off toggle: register or drop the plugin's slots right away, then
-    // repaint so the change is visible without a navigation
+    // on/off toggle: the registry owns the flag (it writes the plugin's store
+    // and derives the slot registration from it), then repaint so the change
+    // is visible without a navigation
     onPluginEnabledChanged: (name, enabled) => {
-      plugins.setSlotEnabled(name, enabled);
+      plugins.setEnabled(name, enabled);
       nav.renderAll();
     },
     pluginInstall: { addFromUrl, openFolder, update: updateOne, remove: removeOne },
