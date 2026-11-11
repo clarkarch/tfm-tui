@@ -88,19 +88,33 @@ export type Scheduler = {
 export type Debounced = (() => void) & { cancel(): void };
 
 export const debounced = (ms: number, fn: () => void, sched: Scheduler = globalThis): Debounced => {
-  let t: unknown = null;
+  // The PENDING run is an explicit RECORD, not the handle's value: the
+  // handle is opaque (`Scheduler.setTimeout` returns `unknown`), so a
+  // scheduler that hands back the old sentinel (null) used to make a
+  // pending run INVISIBLE — the next call did not clear the earlier timer
+  // and `cancel()` cancelled nothing, so the body ran TWICE for one window
+  // and a cancelled operation still did its work.
+  //
+  // The record's IDENTITY is also the generation guard: a timer the
+  // scheduler could not cancel sees that it is no longer the pending
+  // record and does NOT fire the body — the window's body runs exactly
+  // once even when the cancel is a no-op.
+  let pending: { handle: unknown } | null = null;
   const run = () => {
-    if (t !== null) sched.clearTimeout(t);
-    t = sched.setTimeout(() => {
-      t = null;
+    if (pending !== null) sched.clearTimeout(pending.handle);
+    const record: { handle: unknown } = { handle: null };
+    pending = record;
+    record.handle = sched.setTimeout(() => {
+      // superseded — the newer window owns the body
+      if (pending !== record) return;
+      pending = null;
       fn();
     }, ms);
   };
   run.cancel = () => {
-    if (t !== null) {
-      sched.clearTimeout(t);
-      t = null;
-    }
+    if (pending === null) return;
+    sched.clearTimeout(pending.handle);
+    pending = null;
   };
   return run;
 };

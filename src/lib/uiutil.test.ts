@@ -47,6 +47,40 @@ const mkClock = () => {
   return { sched, advance, pending: () => timers.size };
 };
 
+// A scheduler whose handle carries NO identity: `setTimeout` hands back the
+// very sentinel the debounce used for "no pending run" (null), so the pending
+// fact cannot be read off the handle's value. The clock keeps EVERY timer
+// (like a real timer queue) and `clearTimeout(null)` names none of them —
+// the situation the debounce must survive.
+const nullHandleClock = () => {
+  let now = 0;
+  let id = 0;
+  let clears = 0;
+  const timers = new Map<number, { at: number; cb: () => void }>();
+  const sched: Scheduler = {
+    setTimeout: (cb, ms) => {
+      timers.set(++id, { at: now + ms, cb });
+      return null; // no identity
+    },
+    clearTimeout: () => {
+      clears++;
+      // the handle names nothing — the cancel is a no-op
+    },
+  };
+  const advance = (ms: number) => {
+    const target = now + ms;
+    for (const [k, t] of [...timers]) {
+      if (t.at <= target) {
+        timers.delete(k);
+        now = t.at;
+        t.cb();
+      }
+    }
+    now = target;
+  };
+  return { sched, advance, pending: () => timers.size, cleared: () => clears };
+};
+
 // Fakes mirror the REAL collaborator contract (opentui/core Renderable):
 // destroy() DETACHES this node's children without destroying them — only the
 // recursive API walks down. The helper has to do the walking, so a fake whose
@@ -237,6 +271,35 @@ describe("debounced", () => {
     run();
     await Bun.sleep(50);
     expect(runs).toBe(1);
+  });
+
+  // The pending fact must NOT be read off the HANDLE's value: the handle is
+  // opaque (`Scheduler.setTimeout` returns `unknown`), so a scheduler that
+  // hands back the old sentinel (null) makes a pending run INVISIBLE — the
+  // next call does not clear the earlier timer and `cancel()` cancels
+  // nothing. The body then runs TWICE for one window (a duplicate render, a
+  // duplicate file-op kick), and a cancelled operation still does its work.
+  test("a scheduler whose handle carries no identity still runs the body ONCE", () => {
+    const { sched, advance } = nullHandleClock();
+    let runs = 0;
+    const run = debounced(20, () => runs++, sched);
+    run();
+    run(); // the second call must supersede the first
+    advance(1000);
+    expect(runs).toBe(1);
+  });
+
+  test("cancel drops a pending run whose handle carries no identity", () => {
+    const { sched, advance, cleared } = nullHandleClock();
+    let runs = 0;
+    const run = debounced(20, () => runs++, sched);
+    run();
+    run.cancel();
+    // the pending timer is RELEASED (the event loop is not pinned by it),
+    // not just skipped when it fires
+    expect(cleared()).toBe(1);
+    advance(1000);
+    expect(runs).toBe(0); // the cancelled operation left no work behind
   });
 });
 
