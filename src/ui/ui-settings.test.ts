@@ -7,6 +7,7 @@ import { defaultConfig } from "../config/config-schema";
 import type { Theme } from "../config/config";
 import type { SettingGroup, SettingRow } from "./settings";
 import { destroyChildren } from "../lib/uiutil";
+import { type IconFamily, type IconIndex, type IconSpec, PlainIdx } from "../lib/icon-state";
 
 // Headless widget test (createTestRenderer pilot: ui-menu.test.ts). Pins the
 // esc-menu + settings panel through the PUBLIC makeEscMenu surface only, so
@@ -126,25 +127,28 @@ beforeAll(async () => {
     destroyChildren,
     stripSelectable: () => {},
     escHintBtn: (id) => Box({ id, width: 3, height: 1 }),
-    makeIconSlot: (name: string, states: any, heightCells?: number, initialState?: number) => {
+    makeIconSlot: (name: string, states: any, heightCells?: number, initialState?: IconIndex<IconFamily>) => {
       requestedIcons.push(name);
       const slotId = `slot-${iconSeq++}`;
       return {
         el: null,
         slotId,
+        // the fake serves EVERY family, so its spec is family-erased
         spec: {
           slotId,
           name,
           heightCells: heightCells ?? 1,
           states,
-          initialState: initialState ?? 0,
+          initialState: initialState ?? PlainIdx.Rest,
           phase: "pending",
-        },
+        } as IconSpec<any>,
       };
     },
     drainIconQueue: () => {},
     setIconState: (spec, stateIdx) => {
+      if (!spec) return false;
       iconStateCalls.push([spec.slotId, stateIdx]);
+      return true;
     },
     cancelBand: () => {
       cancelledBand++;

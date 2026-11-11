@@ -25,7 +25,7 @@ const makeSelectionForTest = () => {
     colors: () => COLORS,
     byId: () => undefined,
     setText: () => {},
-    setIconState: () => {},
+    setIconState: () => true,
     isCutKey: () => false,
     scroller: () => null,
     viewH: () => 4,

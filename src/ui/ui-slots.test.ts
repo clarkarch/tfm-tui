@@ -11,12 +11,15 @@ import {
   isFloatRootId,
   makePointerSetter,
   makeSlots,
+  selectIconState,
   thumbImageFit,
+  toggleIconState,
   thumbJobRank,
   type SlotsCtx,
   type ThumbJob,
 } from "./ui-slots";
 import type { Theme } from "../config/config";
+import { NavIdx, PlainIdx, SelectIdx, ToggleIdx } from "../lib/icon-state";
 
 // icon rasters need one of the SVG renderers (same gate as icons.test.ts)
 const hasInproc = await import("@resvg/resvg-js").then(() => true).catch(() => false);
@@ -108,7 +111,7 @@ describe("icon slot registry", () => {
     // theme flips must re-raster boot-baked slots (nav buttons et al) that
     // already drained — the prune made them unreachable from the queue
     const h = makeHarness();
-    const s = h.slots.makeIconSlot("no-such-icon-xyz", [{ fg: FG, bg: BG }], 1, 0);
+    const s = h.slots.makeIconSlot("no-such-icon-xyz", [{ fg: FG, bg: BG }], 1, PlainIdx.Rest);
     h.mountFakeSlot(s.spec);
 
     await h.slots.drainIconQueue();
@@ -126,7 +129,7 @@ describe("icon slot registry", () => {
     // under the scrim) — re-rastering alone would strand the old glyph
     // behind every slow/failed raster
     const h = makeHarness();
-    const s = h.slots.makeIconSlot("folder", [{ fg: FG, bg: BG }], 1, 0);
+    const s = h.slots.makeIconSlot("folder", [{ fg: FG, bg: BG }], 1, PlainIdx.Rest);
     const { glyph } = h.mountFakeSlot(s.spec);
     expect(glyph.content).toBe("F");
 
@@ -144,7 +147,7 @@ describe("icon slot registry", () => {
     // second drain actually re-rastered (pruned specs can never drain again)
     const h = makeHarness();
     let color = "#00ff00";
-    const s = h.slots.makeIconSlot("no-such-icon-xyz", [{ fg: color, bg: BG }], 1, 0, undefined, () => [
+    const s = h.slots.makeIconSlot("no-such-icon-xyz", [{ fg: color, bg: BG }], 1, PlainIdx.Rest, undefined, () => [
       { fg: color, bg: BG },
     ]);
     h.mountFakeSlot(s.spec);
@@ -163,7 +166,7 @@ describe("icon slot registry", () => {
     // fail, and the drains no-op with the glyph slots staying as built
     const h = makeHarness();
     h.setTtyMode(true);
-    const s = h.slots.makeIconSlot("no-such-icon-xyz", [{ fg: FG, bg: BG }], 1, 0);
+    const s = h.slots.makeIconSlot("no-such-icon-xyz", [{ fg: FG, bg: BG }], 1, PlainIdx.Rest);
     h.mountFakeSlot(s.spec);
     h.slots.pushThumbJob({
       slotId: "thumb-1",
@@ -191,7 +194,7 @@ describe("icon slot registry", () => {
     // anims and transparency are untouched, only placements stop
     const h = makeHarness();
     h.setForceGlyph(true);
-    const s = h.slots.makeIconSlot("no-such-icon-xyz", [{ fg: FG, bg: BG }], 1, 0);
+    const s = h.slots.makeIconSlot("no-such-icon-xyz", [{ fg: FG, bg: BG }], 1, PlainIdx.Rest);
     h.mountFakeSlot(s.spec);
 
     await h.slots.drainIconQueue();
@@ -213,7 +216,7 @@ describe("icon slot registry", () => {
     // which may never come: the icons stay stale until a resize.
     const h = makeHarness();
     let calls = 0;
-    const s = h.slots.makeIconSlot("no-such-icon-xyz", [{ fg: FG, bg: BG }], 1, 0, undefined, () => {
+    const s = h.slots.makeIconSlot("no-such-icon-xyz", [{ fg: FG, bg: BG }], 1, PlainIdx.Rest, undefined, () => {
       calls++;
       // the statesFactory runs in the pass's first tick — the reset lands
       // exactly there
@@ -235,7 +238,7 @@ describe("icon slot registry", () => {
     const h = makeHarness();
     let calls = 0;
     let phaseDuringRaster: string | undefined;
-    const s = h.slots.makeIconSlot("no-such-icon-xyz", [{ fg: FG, bg: BG }], 1, 0, undefined, () => {
+    const s = h.slots.makeIconSlot("no-such-icon-xyz", [{ fg: FG, bg: BG }], 1, PlainIdx.Rest, undefined, () => {
       calls++;
       // the attempt is not claimed before it resolves
       phaseDuringRaster = s.spec.phase;
@@ -259,6 +262,113 @@ describe("icon slot registry", () => {
     await h.slots.drainIconQueue();
     expect(calls).toBe(2);
     expect(s.spec.phase).toBe("failed");
+  });
+});
+
+// The slot families each own their OWN index space. The old vocabulary was
+// ONE numeric space (IconStateIdx) shared by three families whose senses
+// COLLIDE: index 1 is "on" for a toggle, "disabled" for a nav button and
+// "hover" for a tile, and the hover OFFSET was the same constant as
+// "selected". A nav slot painted with a toggle index compiled fine and
+// showed the WRONG palette.
+//
+// The invariant is a TYPE one: an index is branded with the family that
+// owns it, so the seam refuses a cross-family index at compile time. The
+// expect-error directives below are the pin — an UNUSED directive is a
+// typecheck error.
+describe("the slot state index spaces", () => {
+  // a fake mounted slot with N raster states (the real slot holds one image
+  // per palette entry; setIconState shows the one the index names)
+  const mountStates = (h: ReturnType<typeof makeHarness>, spec: { slotId: string }, count: number) => {
+    const glyph = { id: `${spec.slotId}-g`, content: "F", fg: FG, visible: true };
+    const imgs = Array.from({ length: count }, (_, i) => ({ id: `${spec.slotId}-s${i}`, visible: i === 0 }));
+    const slot = {
+      id: spec.slotId,
+      width: 2,
+      kids: [glyph, ...imgs] as any[],
+      getChildren: () => [...slot.kids],
+    };
+    h.nodes.set(spec.slotId, slot);
+    return imgs;
+  };
+
+  test("a nav slot and a toggle slot cannot share a state index", () => {
+    const h = makeHarness();
+    // the nav family's palette: enabled / disabled / enabled-hover / disabled-hover
+    const navStates = [
+      { fg: FG, bg: BG },
+      { fg: "#777777", bg: BG },
+      { fg: FG, bg: "#222222" },
+      { fg: "#777777", bg: "#222222" },
+    ];
+    // the toggle family's palette: off / on / off-hover / on-hover
+    const toggleStates = [
+      { fg: FG, bg: BG },
+      { fg: "#00ff00", bg: BG },
+      { fg: FG, bg: "#222222" },
+      { fg: "#00ff00", bg: "#222222" },
+    ];
+    const navSlot = h.slots.makeIconSlot("nav", navStates, 1, NavIdx.Enabled);
+    const toggleSlot = h.slots.makeIconSlot("toggle", toggleStates, 1, ToggleIdx.Off);
+    // the nav palette says "disabled" at 1, the toggle palette says "on" at 1
+    // — the same number, two meanings. The type layer keeps them apart.
+    // @ts-expect-error — the toggle family's index is not a nav index
+    h.slots.setIconState(navSlot.spec, ToggleIdx.On);
+    // @ts-expect-error — the nav family's index is not a toggle index
+    h.slots.setIconState(toggleSlot.spec, NavIdx.Disabled);
+
+    // the runtime paint resolves each family's index against its OWN palette
+    // (the numbers did not move — only their MEANING is typed now)
+    const navImgs = mountStates(h, navSlot.spec, 4);
+    h.slots.setIconState(navSlot.spec, NavIdx.DisabledHover);
+    expect(navImgs.map((i) => i.visible)).toEqual([false, false, false, true]);
+    const toggleImgs = mountStates(h, toggleSlot.spec, 4);
+    h.slots.setIconState(toggleSlot.spec, ToggleIdx.OnHover);
+    expect(toggleImgs.map((i) => i.visible)).toEqual([false, false, false, true]);
+    h.slots.setIconState(toggleSlot.spec, ToggleIdx.OffHover);
+    expect(toggleImgs.map((i) => i.visible)).toEqual([false, false, true, false]);
+  });
+
+  test("the families' palettes disagree about the SAME number", () => {
+    // the whole reason the families are split: at index 1 the nav palette
+    // says "disabled" (muted) and the toggle palette says "on" (accent).
+    // A shared numeric space let one family's index paint the other's
+    // meaning, and nothing said so at the call site.
+    const navStates = [
+      { fg: FG, bg: BG },
+      { fg: "#777777", bg: BG },
+      { fg: FG, bg: "#222222" },
+      { fg: "#777777", bg: "#222222" },
+    ];
+    const toggleStates = [
+      { fg: FG, bg: BG },
+      { fg: "#00ff00", bg: BG },
+      { fg: FG, bg: "#222222" },
+      { fg: "#00ff00", bg: "#222222" },
+    ];
+    // the numbers coincide (both are 1) — only the TYPE says otherwise, so
+    // the comparison goes through Number (the brands differ by design)
+    expect(Number(NavIdx.Disabled)).toBe(Number(ToggleIdx.On));
+    expect(navStates[Number(NavIdx.Disabled)]?.fg).toBe("#777777");
+    expect(toggleStates[Number(ToggleIdx.On)]?.fg).toBe("#00ff00");
+  });
+
+  test("each family's helper lands on its OWN palette position", () => {
+    // the hover states are their OWN positions now, not "base + the offset
+    // that happened to equal 'selected'". The toggle family's hover entries
+    // are 2 and 3; the select family's 'selected' is 2 — a coincidence of
+    // NUMBERS, no longer a shared constant.
+    expect(Number(toggleIconState(false, false))).toBe(Number(ToggleIdx.Off));
+    expect(Number(toggleIconState(true, false))).toBe(Number(ToggleIdx.On));
+    expect(Number(toggleIconState(false, true))).toBe(Number(ToggleIdx.OffHover));
+    expect(Number(toggleIconState(true, true))).toBe(Number(ToggleIdx.OnHover));
+    expect(Number(selectIconState(false, false))).toBe(Number(SelectIdx.Rest));
+    expect(Number(selectIconState(false, true))).toBe(Number(SelectIdx.Hover));
+    expect(Number(selectIconState(true, false))).toBe(Number(SelectIdx.Selected));
+    // the select family's cut is its OWN position (a tile in the clipboard's
+    // cut set is dimmed) — it is NOT the toggle family's hover
+    expect(Number(SelectIdx.Cut)).toBe(3);
+    expect(Number(ToggleIdx.OnHover)).toBe(3);
   });
 });
 
@@ -450,8 +560,8 @@ describe("thumbnail mount", () => {
     // the overlay, so its panel is never dimmed and its raster must not be
     // either — hence the override applies to floats too.
     const slots = mkSlots();
-    const content = slots.makeIconSlot("home", [{ fg: FG, bg: BG }], 1, 0);
-    const floater = slots.makeIconSlot("home", [{ fg: FG, bg: BG }], 1, 0);
+    const content = slots.makeIconSlot("home", [{ fg: FG, bg: BG }], 1, PlainIdx.Rest);
+    const floater = slots.makeIconSlot("home", [{ fg: FG, bg: BG }], 1, PlainIdx.Rest);
     t.renderer.root.add(Box({ id: "scrim-content-host", width: 8, height: 1 }, content.el));
     t.renderer.root.add(Box({ id: "tfm-menu", width: 8, height: 1 }, floater.el));
     await t.renderOnce();
@@ -592,7 +702,7 @@ describe("thumbnail mount", () => {
   // Serializing the drain must raster every spec the first pass claimed.
   test.skipIf(!hasSvgRenderer)("overlapping drains still raster every icon slot", async () => {
     const slots = mkSlots();
-    const slot = slots.makeIconSlot("home", [{ fg: FG, bg: BG }], 1, 0);
+    const slot = slots.makeIconSlot("home", [{ fg: FG, bg: BG }], 1, PlainIdx.Rest);
     t.renderer.root.add(Box({ id: `${slot.slotId}-host`, width: 8, height: 1 }, slot.el));
     await t.renderOnce();
     openResolution();
@@ -610,7 +720,7 @@ describe("thumbnail mount", () => {
   // one (and the slot kept its fallback glyph until a theme flip).
   test.skipIf(!hasSvgRenderer)("a landed raster marks the spec ready", async () => {
     const slots = mkSlots();
-    const slot = slots.makeIconSlot("home", [{ fg: FG, bg: BG }], 1, 0);
+    const slot = slots.makeIconSlot("home", [{ fg: FG, bg: BG }], 1, PlainIdx.Rest);
     t.renderer.root.add(Box({ id: `${slot.slotId}-host`, width: 8, height: 1 }, slot.el));
     await t.renderOnce();
     openResolution();
@@ -628,8 +738,8 @@ describe("thumbnail mount", () => {
     // 120x100 box (not the square 100x100 the cell-aspect math gives).
     const slots = mkSlots();
     const states = [{ fg: "#9ece6a", bg: BG }];
-    const plain = slots.makeIconSlot("tfm", states, 5, 0);
-    const faithful = slots.makeIconSlot("tfm", states, 5, 0, undefined, undefined, { faithful: true });
+    const plain = slots.makeIconSlot("tfm", states, 5, PlainIdx.Rest);
+    const faithful = slots.makeIconSlot("tfm", states, 5, PlainIdx.Rest, undefined, undefined, { faithful: true });
     expect(faithful.spec.faithful).toBe(true);
     expect(plain.spec.faithful).toBeFalsy();
     t.renderer.root.add(Box({ id: "faithful-host", width: 16, height: 5 }, plain.el, faithful.el));

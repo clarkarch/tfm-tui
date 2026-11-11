@@ -11,7 +11,7 @@ import { Box, type MouseEvent, Text } from "@opentui/core";
 import { errMessage } from "../lib/uiutil";
 import { applyAdjust, type SettingGroup, type SettingRow } from "./settings";
 import type { MakeIconSlot, SlotElement } from "./ui-slots";
-import { IconStateIdx } from "../lib/icon-state";
+import { ActiveIdx, type SetIconState } from "../lib/icon-state";
 import type { Theme } from "../config/config";
 import type { NodeLike } from "../lib/node-like";
 import type { PointerStyle } from "../lib/pointer";
@@ -87,7 +87,7 @@ type SettingsPanelHooks = {
   makeIconSlot: MakeIconSlot;
   // flip a slot's pre-rastered state (visibility only, no rebuild) — used by
   // the category hover highlight
-  setIconState(spec: IconSpec, stateIdx: number): void;
+  setIconState: SetIconState;
   // repaint ONE category's highlight by id (bg only) — never a rebuild
   paintCatAt(gi: number, on: boolean): void;
   // shell ops — the panel's handlers route back through the state machine
@@ -113,7 +113,7 @@ type SettingsPanelHooks = {
   scrollRows(delta: number): void;
   // register a category's icon spec so the shell can flip its raster state
   // (the category hover paints bg + icon together — one owner)
-  registerCatSpec(gi: number, spec: IconSpec): void;
+  registerCatSpec(gi: number, spec: IconSpec<"active">): void;
   // mouse pointer shape (OSC 22 via the wiring's tty-guarded setter).
   // Absent = no pointer changes. Repeat-safe: the setter dedupes.
   setPointer?(style: PointerStyle): void;
@@ -286,7 +286,7 @@ export const renderSettingsPanel = (
         { fg: c.white, bg: c.accentBg },
       ],
       1,
-      hot ? IconStateIdx.Active : IconStateIdx.Rest,
+      hot ? ActiveIdx.Active : ActiveIdx.Rest,
     );
     // the shell owns the category hover paint (bg + icon) — it needs the
     // spec to flip the raster state

@@ -22,6 +22,7 @@ import { defaultConfig } from "../config/config-schema";
 import { dirWalkStats, fmtBytes } from "../fs/propsinfo";
 import type { Theme } from "../config/config";
 import type { ListEntry } from "../lib/menu-entry";
+import { type IconFamily, type IconIndex, type IconSpec, PlainIdx } from "../lib/icon-state";
 
 // Headless widget test (createTestRenderer pilot: ui-menu.test.ts). Pins the
 // properties dialog through the PUBLIC makeProps surface: single-file layout
@@ -185,7 +186,7 @@ beforeAll(async () => {
       name: string,
       states: any,
       heightCells?: number,
-      initialState?: number,
+      initialState?: IconIndex<IconFamily>,
       onMouseDown?: (ev: any) => void,
     ) => {
       // recorded before the fake handle: `states` is exactly what a real drain
@@ -200,9 +201,9 @@ beforeAll(async () => {
           name,
           heightCells: heightCells ?? 1,
           states,
-          initialState: initialState ?? 0,
+          initialState: initialState ?? PlainIdx.Rest,
           phase: "pending",
-        },
+        } as IconSpec<any>,
       };
     },
     setIconState: (spec, idx) => {

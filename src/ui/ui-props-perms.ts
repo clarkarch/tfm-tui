@@ -6,6 +6,7 @@ import { isRunnableHead } from "../fs/executable";
 import { applySurface, rowSurface, slotBg, type UiStyle } from "./style";
 import type { Theme } from "../config/config";
 import { idName, permWords } from "../fs/propsinfo";
+import { PlainIdx } from "../lib/icon-state";
 import { fsErrText } from "../fs/fsutil";
 import type { ListEntry } from "../lib/menu-entry";
 import type { NotifyLevel } from "../lib/notify-level";
@@ -179,13 +180,13 @@ export const mountPermsEditor = (ctx: PermsCtx, deps: PermsDeps): void => {
       "checkbox-marked",
       [{ fg: colors.accent, bg: slotBg(ctx.uiStyle(), colors, colors.sidebarBg, "float") }],
       1,
-      0,
+      PlainIdx.Rest,
     );
     const cbOffSpec = ctx.makeIconSlot(
       "checkbox-blank",
       [{ fg: colors.sidebarFgMuted, bg: slotBg(ctx.uiStyle(), colors, colors.sidebarBg, "float") }],
       1,
-      0,
+      PlainIdx.Rest,
     );
     const execRowId = "tfm-props-exec";
     const execGapId = "tfm-props-exec-gap";

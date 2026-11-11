@@ -18,7 +18,7 @@ const harness = (over: HarnessOver = {}) => {
     themeGet: () => ({ accent: "#000000" }),
     config: { ui: { uiStyle: "solid" } },
     lookup: { byId: () => null, setTextOnId: () => {}, stripSelectable: () => {} },
-    slots: { setIconState: () => {}, escHintBtn: () => ({}), drainIconQueue: () => {} },
+    slots: { setIconState: () => true, escHintBtn: () => ({}), drainIconQueue: () => {} },
     isCutKey: () => false,
     // the grid scrollers' mount (the boot layout mounts both panes in one
     // step; the fake mirrors the real per-pane reader)

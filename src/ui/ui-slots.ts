@@ -15,15 +15,31 @@ import { applySurface, btnSurface, iconTransparent, slotBg, type UiStyle } from 
 import type { MaybeNode } from "../lib/node-like";
 import type { PointerStyle } from "../lib/pointer";
 import { destroyChildren } from "../lib/uiutil";
-import { IconStateIdx, type IconSpec, type IconState } from "../lib/icon-state";
+import {
+  type IconFamily,
+  type IconIndex,
+  type IconSpec,
+  type IconState,
+  SelectIdx,
+  type SelectIndex,
+  type SetIconState,
+  ToggleIdx,
+  type ToggleIndex,
+} from "../lib/icon-state";
 
-/** Toggle slot (off/on × normal/hover): star, crumbs, hover buttons, esc hint. */
-export const toggleIconState = (on: boolean, hover: boolean): number =>
-  (on ? IconStateIdx.Active : IconStateIdx.Rest) + (hover ? IconStateIdx.HoverOffset : 0);
+/**
+ * Toggle slot (off/on × normal/hover): star, crumbs, hover buttons, esc hint.
+ *
+ * The hover states are their OWN palette positions (OffHover/OnHover), not an
+ * offset added to the base index: in the old shared numeric space the offset
+ * was the same constant as "selected", so one number meant two things.
+ */
+export const toggleIconState = (on: boolean, hover: boolean): ToggleIndex =>
+  on ? (hover ? ToggleIdx.OnHover : ToggleIdx.On) : hover ? ToggleIdx.OffHover : ToggleIdx.Off;
 
 /** Select slot (rest/hover/selected): tiles, sidebar rows. */
-export const selectIconState = (selected: boolean, hover: boolean): number =>
-  selected ? IconStateIdx.Selected : hover ? IconStateIdx.Active : IconStateIdx.Rest;
+export const selectIconState = (selected: boolean, hover: boolean): SelectIndex =>
+  selected ? SelectIdx.Selected : hover ? SelectIdx.Hover : SelectIdx.Rest;
 
 // --- THE hover wiring for every mouse-driven button/row in the UI ---
 // One implementation, because drift here is invisible until a user reports it:
@@ -179,22 +195,32 @@ export type SlotElement = Parameters<typeof Box>[1];
 
 // makeIconSlot's contract: the mountable element, the id the theme/scrim paths
 // look it up by, and the spec setIconState later mutates.
-export type IconSlotHandle = { el: SlotElement; slotId: string; spec: IconSpec };
+//
+// The handle carries the slot's FAMILY: the spec's index is branded with it,
+// so the state seam refuses another family's index.
+export type IconSlotHandle<F extends IconFamily = IconFamily> = {
+  el: SlotElement;
+  slotId: string;
+  spec: IconSpec<F>;
+};
 
 // makeIconSlot's SIGNATURE — ONE spelling, shared by every ctx that takes it.
 // The ctx types used to re-spell it (a dozen places) and most of them dropped
 // the trailing `opts` (the faithful-brand-art switch), so a widget could not
 // ask for a multi-color raster through its ctx, and every signature change
 // had to be mirrored by hand in each copy.
-export type MakeIconSlot = (
+//
+// The family is INFERRED from the initial state (the index carries it as a
+// brand), so a slot cannot be born in one family and painted in another.
+export type MakeIconSlot = <F extends IconFamily = IconFamily>(
   name: string,
   states: IconState[],
-  heightCells?: number,
-  initialState?: number,
+  heightCells: number,
+  initialState: IconIndex<F>,
   onMouseDown?: (ev: MouseEvent) => void,
   statesFactory?: () => IconState[],
   opts?: { faithful?: boolean },
-) => IconSlotHandle;
+) => IconSlotHandle<F>;
 
 export type ThumbJob = {
   slotId: string;
@@ -369,18 +395,18 @@ export const makeSlots = (ctx: SlotsCtx) => {
     return { cellW, cellH, aspect: cellH > 0 ? cellH / cellW : 2 };
   };
 
-  const makeIconSlot: MakeIconSlot = (
+  const makeIconSlot = <F extends IconFamily = IconFamily>(
     name: string,
     states: IconState[],
     heightCells = 1,
-    initialState = 0,
+    initialState: IconIndex<F>,
     onMouseDown?: (ev: MouseEvent) => void,
     statesFactory?: () => IconState[],
     opts?: { faithful?: boolean },
-  ): IconSlotHandle => {
+  ): IconSlotHandle<F> => {
     const slotId = `tfm-icon-${iconSeq++}`;
     const g = ctx.glyphFor(name);
-    const spec: IconSpec = {
+    const spec: IconSpec<F> = {
       slotId,
       name,
       heightCells,
@@ -407,7 +433,13 @@ export const makeSlots = (ctx: SlotsCtx) => {
     };
   };
 
-  const setIconState = (spec: IconSpec | undefined, stateIdx: number): boolean => {
+  // the seam's type is the SHARED one (SetIconState) — the implementation and
+  // every ctx that takes it speak the same spelling, so a change to the
+  // family's rule lands in ONE place
+  const setIconState: SetIconState = <F extends IconFamily>(
+    spec: IconSpec<F> | undefined,
+    stateIdx: IconIndex<NoInfer<F>>,
+  ): boolean => {
     if (!spec) return false;
     spec.initialState = stateIdx;
     const slot = ctx.byId(spec.slotId);
@@ -823,7 +855,7 @@ export const makeSlots = (ctx: SlotsCtx) => {
       },
       { fg: ctx.colors().white, bg: ctx.colors().hoverBg },
     ];
-    const slot = makeIconSlot("close", states(), 1, IconStateIdx.Rest, undefined, states);
+    const slot = makeIconSlot("close", states(), 1, ToggleIdx.Off, undefined, states);
     const paint = (on: boolean) => {
       setIconState(slot.spec, toggleIconState(on, false));
       try {

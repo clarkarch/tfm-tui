@@ -1,6 +1,7 @@
 import { Box, Text } from "@opentui/core";
 import type { NotifyLevel } from "../lib/notify-level";
 import type { MaybeNode, NodeLike } from "../lib/node-like";
+import { PlainIdx } from "../lib/icon-state";
 import type { PointerStyle } from "../lib/pointer";
 import { hoverEvents, type MakeIconSlot, type SlotElement } from "./ui-slots";
 
@@ -569,7 +570,12 @@ export const makeNotify = (
         // FLOAT_TOAST_PREFIX in ui-slots), so this is the raster's flatten
         // target and the icon is opaque under `transparent-partial` like every
         // other float icon — it is decoration, so it has no hover state.
-        const slot = ctx.makeIconSlot(meta.icon, [{ fg: meta.titleFg, bg: ctx.accentBg() }], TOAST_ICON_CELLS);
+        const slot = ctx.makeIconSlot(
+          meta.icon,
+          [{ fg: meta.titleFg, bg: ctx.accentBg() }],
+          TOAST_ICON_CELLS,
+          PlainIdx.Rest,
+        );
         pushToast(
           id,
           w,

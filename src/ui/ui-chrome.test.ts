@@ -13,6 +13,7 @@ import { loadSystemPlaces, resetSystemPlaces, type SidebarVisibility } from "../
 import type { NotifyLevel } from "../lib/notify-level";
 import { cursorAt, NO_CURSOR, type Cursor } from "../lib/uiutil";
 import type { Theme } from "../config/config";
+import { type IconFamily, type IconIndex, type IconSpec, PlainIdx } from "../lib/icon-state";
 import type { Tab } from "../fs/session";
 
 // Headless widget test (createTestRenderer pilot: ui-menu.test.ts). Pins the
@@ -203,7 +204,9 @@ beforeAll(async () => {
       name: string,
       states: any,
       heightCells?: number,
-      initialState?: number,
+      // the real seam takes a FAMILY-branded index; the fake serves every
+      // family, so it accepts the union brand
+      initialState?: IconIndex<IconFamily>,
       onMouseDown?: (ev: any) => void,
     ) => {
       const slotId = `slot-${name}-${iconSlots++}`;
@@ -215,14 +218,15 @@ beforeAll(async () => {
           ...(onMouseDown ? { onMouseDown } : {}),
         }),
         slotId,
+        // the fake serves EVERY family, so its spec is family-erased
         spec: {
           slotId,
           name,
           heightCells: heightCells ?? 1,
           states,
-          initialState: initialState ?? 0,
+          initialState: initialState ?? PlainIdx.Rest,
           phase: "pending",
-        },
+        } as IconSpec<any>,
       };
     },
     setIconState: (spec, idx) => {
@@ -444,7 +448,14 @@ describe("renderSidebar", () => {
         makeIconSlot: (name: string) => ({
           el: null,
           slotId: `intro-${name}`,
-          spec: { slotId: `intro-${name}`, name, heightCells: 1, states: [], initialState: 0, phase: "pending" },
+          spec: {
+            slotId: `intro-${name}`,
+            name,
+            heightCells: 1,
+            states: [],
+            initialState: PlainIdx.Rest,
+            phase: "pending",
+          } as IconSpec<any>,
         }),
         setIconState: () => true,
         stateCwd: () => HOME,
@@ -950,7 +961,7 @@ describe("eject / mount", () => {
       name: string,
       states: unknown,
       heightCells?: number,
-      initialState?: number,
+      initialState?: IconIndex<IconFamily>,
       onMouseDown?: (ev: unknown) => void,
     ) => {
       // unique ids per slot: the real makeIconSlot sequences them, and three
@@ -964,7 +975,13 @@ describe("eject / mount", () => {
       return {
         el,
         slotId,
-        spec: { slotId, name, heightCells: heightCells ?? 1, states, initialState: initialState ?? 0 },
+        spec: {
+          slotId,
+          name,
+          heightCells: heightCells ?? 1,
+          states,
+          initialState: initialState ?? PlainIdx.Rest,
+        } as IconSpec<any>,
       };
     };
     const spawnUdisks = (args: string[]): FakeChild => {

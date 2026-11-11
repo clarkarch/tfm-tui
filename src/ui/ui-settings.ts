@@ -16,7 +16,7 @@ import type { UiStyle } from "../config/config-schema";
 import { makeModalScrim } from "./ui-dialogs";
 import { applyAdjust, type SettingGroup, type SettingRow } from "./settings";
 import type { MakeIconSlot, SlotElement } from "./ui-slots";
-import { IconStateIdx } from "../lib/icon-state";
+
 import type { Theme } from "../config/config";
 import { type KeyEventLike, keySpecFromEvent, validateKeybindSpec } from "../config/keyspec";
 import type { NodeLike } from "../lib/node-like";
@@ -45,7 +45,7 @@ import { aboutPanelWidth, renderAboutPanel, type AboutDetail } from "./ui-about"
 import type { KeyAction, KeybindSetResult } from "../config/config-schema";
 import type { MaybeNode } from "../lib/node-like";
 import type { PointerStyle } from "../lib/pointer";
-import type { IconSpec } from "../lib/icon-state";
+import { ActiveIdx, type IconSpec, type SetIconState } from "../lib/icon-state";
 
 type EscMenuCtx = {
   renderer(): CliRenderer;
@@ -54,7 +54,7 @@ type EscMenuCtx = {
   stripSelectable(): void;
   escHintBtn(id: string, onClose: () => void): SlotElement;
   makeIconSlot: MakeIconSlot;
-  setIconState(spec: IconSpec, stateIdx: number): void;
+  setIconState: SetIconState;
   drainIconQueue(): void | Promise<void>;
   // a modal must kill any in-flight rubber-band (grid-input owns the gesture)
   cancelBand(): void;
@@ -367,7 +367,8 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
   // highlighting only the row left the icon showing a stale sidebarBg square.
   // Lives at factory scope (not inside buildMenuContent) so the keyboard
   // cursor can repaint a root row without rebuilding the panel.
-  const rootSpecs: (IconSpec | undefined)[] = [];
+  // the settings rows' icons live in the ACTIVE family (rest / active)
+  const rootSpecs: (IconSpec<"active"> | undefined)[] = [];
   const paintRootAt = (index: number, on: boolean): void => {
     const c = menuC;
     setOnId(`tfm-root-row-${index}`, (n) => {
@@ -377,7 +378,7 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
       n.fg = c.white;
     });
     const spec = rootSpecs[index];
-    if (spec) ctx.setIconState(spec, on ? IconStateIdx.Active : IconStateIdx.Rest);
+    if (spec) ctx.setIconState(spec, on ? ActiveIdx.Active : ActiveIdx.Rest);
   };
 
   // repaint ONE category's hover/active highlight by id — no rebuild, and it
@@ -394,7 +395,7 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
   // (bg + the icon's pre-rastered state), so it needs the spec the panel
   // built. Lives at factory scope (like rootSpecs) so a hover can flip the
   // raster without rebuilding the panel.
-  const catSpecs: (IconSpec | undefined)[] = [];
+  const catSpecs: (IconSpec<"active"> | undefined)[] = [];
 
   // --- the panel's actions (the renderer never mutates the state) ---
   // focus a row (mouse hover / click) — the shell owns the focus record AND
@@ -427,7 +428,7 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
       if (gi >= 0) {
         paintCatAt(gi, false);
         const spec = catSpecs[gi];
-        if (spec) ctx.setIconState(spec, gi === activeCat() ? IconStateIdx.Active : IconStateIdx.Rest);
+        if (spec) ctx.setIconState(spec, gi === activeCat() ? ActiveIdx.Active : ActiveIdx.Rest);
       }
     }
     if (key !== null) {
@@ -435,7 +436,7 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
       if (gi >= 0) {
         paintCatAt(gi, true);
         const spec = catSpecs[gi];
-        if (spec) ctx.setIconState(spec, IconStateIdx.Active);
+        if (spec) ctx.setIconState(spec, ActiveIdx.Active);
       }
     }
   };
@@ -898,7 +899,7 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
                       { fg: c.white, bg: c.accentBg },
                     ],
                     1,
-                    active ? IconStateIdx.Active : IconStateIdx.Rest,
+                    active ? ActiveIdx.Active : ActiveIdx.Rest,
                   );
                   rootSpecs[index] = slot.spec;
                   return slot.el;

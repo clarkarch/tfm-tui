@@ -15,7 +15,7 @@ import { archiveUri, parseArchiveUri } from "../fs/archive-scheme";
 import { stripControlChars } from "../lib/uiutil";
 import type { MakeIconSlot, SlotElement } from "./ui-slots";
 import { hoverEvents, toggleIconState } from "./ui-slots";
-import { IconStateIdx, type IconState, type IconSpec } from "../lib/icon-state";
+import { NavIdx, ToggleIdx, type IconState, type IconSpec, type NavIndex, type SetIconState } from "../lib/icon-state";
 import type { ListEntry } from "../lib/menu-entry";
 import type { NotifyLevel } from "../lib/notify-level";
 import type { MaybeNode } from "../lib/node-like";
@@ -58,7 +58,7 @@ type ToolbarCtx = {
   // live theme — always read through the getter, never captured
   colors(): Theme;
   makeIconSlot: MakeIconSlot;
-  setIconState(spec: IconSpec, index: number): void;
+  setIconState: SetIconState;
   closeFileMenu(): void;
   blurTerminal(): void;
   // focus this toolbar's pane on any press (deferred: grid wires after chrome)
@@ -206,7 +206,9 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
   // rebuild replaces it.
   type NavButtonState = {
     id: string;
-    spec: IconSpec;
+    // the nav family's palette: enabled / disabled / enabled-hover /
+    // disabled-hover
+    spec: IconSpec<"nav">;
     // where the enabled flag comes from (the wiring seam)
     isEnabled(): boolean;
     // the cached enabled flag (refreshed by refreshNav)
@@ -218,8 +220,8 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
   // the nav raster index: enabled/disabled × normal/hover. It lives HERE
   // (its only consumer) because the index and the hover flag are ONE state
   // — the record's paint reads both.
-  const navIconState = (enabled: boolean, hovered: boolean): number =>
-    (enabled ? IconStateIdx.Rest : IconStateIdx.Active) + (hovered ? IconStateIdx.HoverOffset : 0);
+  const navIconState = (enabled: boolean, hovered: boolean): NavIndex =>
+    enabled ? (hovered ? NavIdx.EnabledHover : NavIdx.Enabled) : hovered ? NavIdx.DisabledHover : NavIdx.Disabled;
 
   // the paint: BOTH halves of a button (the baked raster state AND the
   // wrapper box surface) read the ONE record.
@@ -246,7 +248,7 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
       { fg: ctx.colors().sidebarFg, bg: ctx.colors().hoverBg },
       { fg: ctx.colors().sidebarFgMuted, bg: ctx.colors().hoverBg },
     ];
-    const slot = makeIconSlot(iconName, states(), 1, 0, undefined, states);
+    const slot = makeIconSlot(iconName, states(), 1, NavIdx.Enabled, undefined, states);
     // the record is OWNED by this button: a rebuild (a fresh shell) makes a
     // NEW record and REPLACES the dead button's one, so the dead button's
     // hover cannot survive.
@@ -457,7 +459,7 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
             { fg, bg: ctx.colors().bg },
             { fg: ctx.colors().white, bg: ctx.colors().hoverBg },
           ];
-      const iconSlot = c.icon ? makeIconSlot(c.icon, iconStates, 1) : null;
+      const iconSlot = c.icon ? makeIconSlot(c.icon, iconStates, 1, ToggleIdx.Off) : null;
       const paintHover = (on: boolean) => {
         if (iconSlot && !current) setIconState(iconSlot.spec, toggleIconState(on, false));
         try {
@@ -517,7 +519,7 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
       { fg: ctx.colors().sidebarFg, bg: ctx.colors().bg },
       { fg: ctx.colors().sidebarFg, bg: ctx.colors().hoverBg },
     ];
-    const slot = makeIconSlot(iconName, states(), 1, 0, undefined, states);
+    const slot = makeIconSlot(iconName, states(), 1, ToggleIdx.Off, undefined, states);
     const paint = (on: boolean) => {
       setIconState(slot.spec, toggleIconState(on, false));
       try {

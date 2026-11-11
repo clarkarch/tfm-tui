@@ -17,8 +17,8 @@ import { mountPermsEditor } from "./ui-props-perms";
 import type { NotifyLevel } from "../lib/notify-level";
 import type { MaybeNode, NodeLike } from "../lib/node-like";
 import type { PointerStyle } from "../lib/pointer";
-import { IconStateIdx, type IconState } from "../lib/icon-state";
-import type { IconSpec } from "../lib/icon-state";
+import { PlainIdx, ToggleIdx, type IconState } from "../lib/icon-state";
+import type { IconSpec, SetIconState } from "../lib/icon-state";
 
 // --- Properties dialog (floating, right-click -> Properties…): star/bookmark
 // toggles, hero icon/thumbnail, nautilus-style permissions editor. Theme +
@@ -70,7 +70,7 @@ type PropsCtx = {
   colors(): Theme;
   home: string;
   makeIconSlot: MakeIconSlot;
-  setIconState(spec: IconSpec | undefined, stateIdx: number): boolean;
+  setIconState: SetIconState;
   fallbackGlyphFor(name: string): string;
   cellMetrics(): { aspect: number };
   // the directory-walk seam: the aggregate size of a folder (and of a
@@ -168,7 +168,7 @@ export const makeProps = (ctx: PropsCtx) => {
       { fg: colors.sidebarFgMuted, bg: colors.hoverBg },
       { fg: colors.accent, bg: colors.hoverBg },
     ];
-    const propsTogglePaint = (btnId: string, spec: IconSpec | undefined, on: boolean, hover: boolean) => {
+    const propsTogglePaint = (btnId: string, spec: IconSpec<"toggle"> | undefined, on: boolean, hover: boolean) => {
       ctx.setIconState(spec, toggleIconState(on, hover));
       try {
         const n = ctx.byId(btnId);
@@ -176,7 +176,7 @@ export const makeProps = (ctx: PropsCtx) => {
       } catch {}
     };
 
-    const starSlot = ctx.makeIconSlot("star", propsToggleStates(), 1, 0, () => {
+    const starSlot = ctx.makeIconSlot("star", propsToggleStates(), 1, ToggleIdx.Off, () => {
       starred = !starred;
       propsTogglePaint("tfm-props-star", starSlot.spec, starred, starHover);
       if (starred) starredRegistryAdd(targetPath);
@@ -185,7 +185,7 @@ export const makeProps = (ctx: PropsCtx) => {
     });
     let starHover = false;
     let starred = readStarredList().includes(targetPath);
-    if (starred) ctx.setIconState(starSlot.spec, IconStateIdx.Active);
+    if (starred) ctx.setIconState(starSlot.spec, ToggleIdx.On);
     void execGio(["info", "-a", "metadata::starred", targetPath])
       .then(({ code, stdout }) => {
         if (code !== 0) return;
@@ -294,6 +294,7 @@ export const makeProps = (ctx: PropsCtx) => {
         iconName,
         [{ fg: colors.white, bg: slotBg(ctx.uiStyle(), colors, colors.sidebarBg, "float") }],
         ICON_H,
+        PlainIdx.Rest,
       ).el;
     }
     panel.add(
@@ -422,6 +423,7 @@ export const makeProps = (ctx: PropsCtx) => {
       "select-all",
       [{ fg: colors.white, bg: slotBg(ctx.uiStyle(), colors, colors.sidebarBg, "float") }],
       ICON_H,
+      PlainIdx.Rest,
     ).el;
     panel.add(
       Box(

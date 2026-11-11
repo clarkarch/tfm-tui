@@ -10,7 +10,7 @@ import { fmtBytes, inodeKey } from "../fs/propsinfo";
 import type { Theme } from "../config/config";
 import type { ClipItem } from "../lib/file-op-protocol";
 import { TileVisual, type TileVisualMode } from "./grid-input";
-import { IconStateIdx, type IconSpec } from "../lib/icon-state";
+import { SelectIdx, type IconSpec, type SetIconState } from "../lib/icon-state";
 
 import type { MaybeNode, ScrollerLike } from "../lib/node-like";
 
@@ -23,7 +23,8 @@ export type SelTileRef = {
   // and wrote to destroyed renderables. ONE explicit flag, owned by the grid
   // (it builds the rows and reaps them).
   mounted: boolean;
-  iconSpec?: IconSpec;
+  // the tile's icon lives in the SELECT family (rest / hover / selected / cut)
+  iconSpec?: IconSpec<"select">;
   iconSlotId?: string;
   selected: boolean;
   baseFg: string;
@@ -43,7 +44,7 @@ export type SelectionCtx = {
   colors(): Theme;
   byId(id: string): MaybeNode;
   setText(id: string, s: string): void;
-  setIconState(spec: IconSpec | undefined, mode: number): void;
+  setIconState: SetIconState;
   isCutKey(key: string): boolean;
   scroller(): ScrollerLike | null;
   viewH(): number;
@@ -202,7 +203,7 @@ export const makeSelection = (ctx: SelectionCtx) => {
     // in the ref — it is re-painted when the row is built again.
     if (!refs.mounted) return;
     const cut = mode === TileVisual.Rest && !refs.selected && ctx.isCutKey(key);
-    ctx.setIconState(refs.iconSpec, cut ? IconStateIdx.Cut : mode);
+    ctx.setIconState(refs.iconSpec, cut ? SelectIdx.Cut : mode);
     if (!refs.iconSpec) {
       // thumbnail slots have no state rasters — fade the whole slot instead
       try {

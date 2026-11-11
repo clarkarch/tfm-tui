@@ -10,6 +10,7 @@ import type { MaybeNode } from "../lib/node-like";
 import type { PointerStyle } from "../lib/pointer";
 import type { ListEntry } from "../lib/menu-entry";
 import type { ClipItem } from "../lib/file-op-protocol";
+import { SelectIdx } from "../lib/icon-state";
 import {
   dispatchDrag,
   dragActive,
@@ -43,7 +44,16 @@ export type TileMouseEvent = {
 // Tile highlight states painted by selection.setTileVisual. Names replace the
 // bare 0/1/2 literals at call sites — Rest also covers the cut-dim case (the
 // dim itself is resolved inside setTileVisual via isCutKey).
-export const TileVisual = { Rest: 0, Hover: 1, Selected: 2 } as const;
+//
+// The tile's icon palette IS the select family (rest / hover / selected /
+// cut), so the vocabulary lives in lib/icon-state: TileVisual is that
+// family's three PAINTABLE states — the cut is DERIVED inside setTileVisual
+// (from the clipboard), not a mode a caller can pass.
+export const TileVisual = {
+  Rest: SelectIdx.Rest,
+  Hover: SelectIdx.Hover,
+  Selected: SelectIdx.Selected,
+} as const;
 export type TileVisualMode = (typeof TileVisual)[keyof typeof TileVisual];
 
 // structural view of a tile ref — the full TileRefs in ./selection satisfies this

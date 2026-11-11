@@ -13,6 +13,7 @@ import type { Theme } from "../config/config";
 import { hoverEvents, type MakeIconSlot } from "./ui-slots";
 import { truncateToastText } from "./notify";
 import type { NodeLike } from "../lib/node-like";
+import { PlainIdx } from "../lib/icon-state";
 import type { PointerStyle } from "../lib/pointer";
 
 export type AboutDetail = "credits" | null;
@@ -102,9 +103,17 @@ export const renderAboutPanel = (c: Theme, panel: NodeLike, deps: AboutDeps): vo
   const room = aboutValueRoom(aboutPanelWidth(deps.renderer().terminalWidth));
   // single rest state, no hover flip: the view is cursorless. The slot keeps
   // its palette in every ui-style (brand art, not a theme glyph).
-  const logo = deps.makeIconSlot("tfm", [{ fg: c.white, bg: c.sidebarBg }], ABOUT_LOGO_CELLS, 0, undefined, undefined, {
-    faithful: true,
-  });
+  const logo = deps.makeIconSlot(
+    "tfm",
+    [{ fg: c.white, bg: c.sidebarBg }],
+    ABOUT_LOGO_CELLS,
+    PlainIdx.Rest,
+    undefined,
+    undefined,
+    {
+      faithful: true,
+    },
+  );
 
   // one category row: label + preview value. Links open; the credits summary
   // drills (it never fits); everything else is inert text. Only actionable

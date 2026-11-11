@@ -30,7 +30,7 @@ const stubCtx = (over: Partial<ProgressCtx> = {}): { ctx: ProgressCtx; calls: st
     // partial theme is fine — only white/accentBg/hoverBg are read
     colors: () => ({ white: "#ffffff", accentBg: "#1a1b26", hoverBg: "#2a2b36" }) as any,
     // the progress path only reads slotId; el/spec are placeholders
-    makeIconSlot: () => ({ el: {}, slotId: "tfm-icon-test", spec: {} }) as unknown as IconSlotHandle,
+    makeIconSlot: () => ({ el: {}, slotId: "tfm-icon-test", spec: {} }) as unknown as IconSlotHandle<any>,
     setIconState: () => false,
     drainIconQueue: () => {},
     // shell belongs to ./notify — the stub hands out closable handles
@@ -483,7 +483,7 @@ describe("progress repaint", () => {
             el: Box({ width: 2, height: 1 }),
             slotId: `tfm-slot-${++slotSeq}`,
             spec: {},
-          }) as unknown as IconSlotHandle,
+          }) as unknown as IconSlotHandle<any>,
         byId: (id: string) => t.renderer.root.findDescendantById(id),
         notifySticky: (children: any[]) => {
           const nodeId = `tfm-toast-${++seq}`;
@@ -527,7 +527,7 @@ describe("progress repaint", () => {
             el: Box({ width: 2, height: 1 }),
             slotId: `tfm-slot-${++seq}`,
             spec: {},
-          }) as unknown as IconSlotHandle,
+          }) as unknown as IconSlotHandle<any>,
         byId: (id: string) => t.renderer.root.findDescendantById(id) as unknown as MaybeNode,
         notifySticky: (children: any[]) => {
           const nodeId = `tfm-toast-${++seq}`;

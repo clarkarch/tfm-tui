@@ -10,7 +10,7 @@ import { defaultConfig } from "../config/config-schema";
 import type { Theme } from "../config/config";
 
 import type { Tab } from "../fs/session";
-import type { IconSpec } from "../lib/icon-state";
+import { type IconSpec, PlainIdx } from "../lib/icon-state";
 import { NO_CURSOR } from "../lib/uiutil";
 
 // End-to-end stuck-lift guard: the recording-stub test in ui-chrome.test.ts only
@@ -89,7 +89,7 @@ beforeAll(async () => {
     stripSelectable: noop,
     drainIconQueue: noop,
     // real slot node mounted into the tree so its translate is observable
-    makeIconSlot: (name: string): { el: any; slotId: string; spec: IconSpec } => {
+    makeIconSlot: (name: string): { el: any; slotId: string; spec: IconSpec<any> } => {
       const slotId = `int-icon-${seq++}`;
       const el = Box({ id: slotId, width: 1, height: 1 }, Box({ id: `${slotId}-s0`, width: 1, height: 1 }));
       const spec = {
@@ -97,9 +97,9 @@ beforeAll(async () => {
         name,
         heightCells: 1,
         states: [],
-        initialState: 0,
+        initialState: PlainIdx.Rest,
         phase: "ready",
-      } as unknown as IconSpec;
+      } as unknown as IconSpec<any>;
       return { el, slotId, spec };
     },
     setIconState: () => true,

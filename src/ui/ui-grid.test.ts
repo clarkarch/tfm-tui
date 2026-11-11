@@ -23,6 +23,7 @@ import type { Entry } from "../fs/listing";
 import type { TileMouseHandlers } from "../input/grid-input";
 import { TileVisual } from "../input/grid-input";
 import type { IconSlotHandle } from "./ui-slots";
+import { type IconFamily, type IconIndex, type IconSpec, PlainIdx } from "../lib/icon-state";
 import { applySurface, tileSurface } from "./style";
 import { defaultConfig } from "../config/config-schema";
 import type { HoverLiftOpts, WrapMode } from "../config/config-schema";
@@ -194,6 +195,7 @@ beforeAll(async () => {
     setText: () => {},
     setIconState: (spec, idx) => {
       iconStateCalls.push({ spec, idx });
+      return true;
     },
     isCutKey: (key) => cutKeys.has(key),
     scroller: () => null,
@@ -245,10 +247,15 @@ beforeAll(async () => {
       return tilePrefix;
     },
     cellMetrics: () => ({ cellW: 10, cellH: 20, aspect: ASPECT }),
-    makeIconSlot: (name: string, states: any, heightCells = 1, initialState = 0) => {
+    makeIconSlot: (name: string, states: any, heightCells = 1, initialState: IconIndex<IconFamily> = PlainIdx.Rest) => {
       iconSlots.push({ name, heightCells, initialState });
       const slotId = `fake-slot-${iconSeq++}`;
-      return { el: null, slotId, spec: { slotId, name, heightCells, states, initialState, phase: "pending" } };
+      // the fake serves EVERY family, so its spec is family-erased
+      return {
+        el: null,
+        slotId,
+        spec: { slotId, name, heightCells, states, initialState, phase: "pending" } as IconSpec<any>,
+      };
     },
     pushThumbJob: (job: any) => {
       thumbJobs.push(job);
@@ -572,7 +579,7 @@ describe("renderGrid (grid tiles)", () => {
       colors: () => colors,
       byId: (id) => t.renderer.root.findDescendantById(id),
       setText: () => {},
-      setIconState: () => {},
+      setIconState: () => true,
       isCutKey: (key) => cutKeys.has(key),
       scroller: () => null,
       viewH: () => TERM_H - 3,
@@ -608,7 +615,7 @@ describe("renderGrid (grid tiles)", () => {
       makeIconSlot: (name: string) => {
         const slotId = `boot-slot-${bootSeq++}`;
         // the boot path only reads slotId; el/spec are placeholders
-        return { el: null, slotId, spec: { slotId, name } } as unknown as IconSlotHandle;
+        return { el: null, slotId, spec: { slotId, name } } as unknown as IconSlotHandle<any>;
       },
       pushThumbJob: () => {},
       nextIconId: () => `boot-icon-${bootSeq++}`,

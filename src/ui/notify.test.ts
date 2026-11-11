@@ -54,7 +54,7 @@ const makeFake = (opts?: { durationMs?: number }) => {
     makeIconSlot: (name: string, states: Array<{ fg: string; bg: string }>, heightCells = 1) => {
       icons.push({ name, fg: states[0]?.fg ?? "", bg: states[0]?.bg ?? "", heightCells });
       // the notify path only reads slotId; the slot's icon surface is untested here
-      return { el: { icon: name }, slotId: `slot-${icons.length}`, spec: {} } as unknown as IconSlotHandle;
+      return { el: { icon: name }, slotId: `slot-${icons.length}`, spec: {} } as unknown as IconSlotHandle<any>;
     },
     drainIconQueue: () => {},
     stripSelectable: () => {},
@@ -281,7 +281,7 @@ describe("notify stacking (real renderer)", () => {
             el: Box({ id: `tfm-icon-test-${name}`, width: 2, height: 1 }, Text({ content: name })),
             slotId: `tfm-icon-test-${name}`,
             spec: {},
-          }) as unknown as IconSlotHandle,
+          }) as unknown as IconSlotHandle<any>,
         drainIconQueue: () => {},
         stripSelectable: () => {},
         durationMs: () => 10000,
@@ -345,7 +345,7 @@ describe("notify stacking (real renderer)", () => {
             el: Box({ id: `tfm-icon-test-${name}`, width: 2, height: 1 }, Text({ content: name })),
             slotId: `tfm-icon-test-${name}`,
             spec: {},
-          }) as unknown as IconSlotHandle,
+          }) as unknown as IconSlotHandle<any>,
         drainIconQueue: () => {},
         stripSelectable: () => {},
         durationMs: () => 10000,
@@ -356,7 +356,7 @@ describe("notify stacking (real renderer)", () => {
         stripSelectable: () => {},
         colors,
         makeIconSlot: () =>
-          ({ el: Text({ content: "i" }), slotId: "tfm-icon-test", spec: {} }) as unknown as IconSlotHandle,
+          ({ el: Text({ content: "i" }), slotId: "tfm-icon-test", spec: {} }) as unknown as IconSlotHandle<any>,
         setIconState: () => false,
         drainIconQueue: () => {},
         notifySticky: (children: any[], opts?: { width?: number; height?: number }) => notifySticky(children, opts),
@@ -428,7 +428,7 @@ describe("notify layout (B1: big icon column)", () => {
             ),
             slotId: `tfm-icon-test-${name}`,
             spec: {},
-          }) as unknown as IconSlotHandle,
+          }) as unknown as IconSlotHandle<any>,
         drainIconQueue: () => {},
         stripSelectable: () => {},
         durationMs: () => 10000,
@@ -501,7 +501,7 @@ describe("notify layout (B1: big icon column)", () => {
             ),
             slotId: `tfm-icon-test-${name}`,
             spec: {},
-          }) as unknown as IconSlotHandle,
+          }) as unknown as IconSlotHandle<any>,
         drainIconQueue: () => {},
         stripSelectable: () => {},
         durationMs: () => 10000,
@@ -567,7 +567,7 @@ describe("notify expansion (a cut message is clickable)", () => {
         ),
         slotId: `tfm-icon-test-${name}`,
         spec: {},
-      }) as unknown as IconSlotHandle,
+      }) as unknown as IconSlotHandle<any>,
     drainIconQueue: () => {},
     stripSelectable: () => {},
     durationMs: () => durationMs,
@@ -714,7 +714,7 @@ describe("toast clock (one record, one hold set)", () => {
         el: Box({ id: `tfm-icon-test-${name}`, width: 2, height: 1 }, Text({ content: name })),
         slotId: `tfm-icon-test-${name}`,
         spec: {},
-      }) as unknown as IconSlotHandle,
+      }) as unknown as IconSlotHandle<any>,
     drainIconQueue: () => {},
     stripSelectable: () => {},
     durationMs: () => durationMs,

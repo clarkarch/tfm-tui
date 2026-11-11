@@ -78,6 +78,7 @@ const makeHarness = () => {
     },
     setIconState: (spec: any, mode: number) => {
       if (spec) iconEvents.push({ key: spec.__key, mode });
+      return true;
     },
     isCutKey: (k: string) => cutKeys.has(k),
     scroller: () => scroller,
@@ -123,7 +124,7 @@ const makeHarness = () => {
       isDir,
       ...(withIconSpec
         ? // a marker spec: the test only asserts identity, not the icon surface
-          { iconSpec: { __key: key } as unknown as IconSpec }
+          { iconSpec: { __key: key } as unknown as IconSpec<"select"> }
         : { iconSlotId: `slot:${key}` }),
     };
     sel.tileRefs.set(key, ref);

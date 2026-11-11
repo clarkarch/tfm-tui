@@ -22,11 +22,11 @@ import { parseArchiveUri } from "../fs/archive-scheme";
 
 // shared icon-slot types come from ./ui-slots (their queue) — the old
 // byte-identical structural mirrors drifted when ui-slots gained a field
-import type { MakeIconSlot, SlotElement } from "./ui-slots";
+import type { IconSlotHandle, MakeIconSlot, SlotElement } from "./ui-slots";
 import type { MaybeNode } from "../lib/node-like";
 import type { PointerStyle } from "../lib/pointer";
 import type { IconState } from "../lib/icon-state";
-import type { IconSpec } from "../lib/icon-state";
+import { ToggleIdx, type IconSpec, type SetIconState } from "../lib/icon-state";
 
 export const TAB_CHIP_MAX_W = 24; // roomy width, kept whenever the strip fits
 export const TAB_CHIP_MIN_W = 6; // pad + 1-2 title cells + close; below this the tail clips
@@ -167,7 +167,7 @@ type ChromeCtx = {
   stripSelectable(): void;
   drainIconQueue(): void;
   makeIconSlot: MakeIconSlot;
-  setIconState(spec: IconSpec | undefined, stateIdx: number): boolean;
+  setIconState: SetIconState;
   stateCwd(): string; // live state.cwd
   // user feedback for mount/eject (wiring's notify). Optional so old fakes
   // keep working — absent = today's silent behavior.
@@ -195,7 +195,9 @@ export const makeChrome = (ctx: ChromeCtx) => {
     // the place's stable identity — the mouse hover is keyed by it (the row
     // ids are index-keyed and MOVE when the list is rebuilt)
     key: string;
-    specs: IconSpec[];
+    // the sidebar row's icon lives in the SELECT family (rest / hover /
+    // selected)
+    specs: IconSpec<"select">[];
     selected: boolean;
     place: Place;
   }[] = [];
@@ -381,7 +383,7 @@ export const makeChrome = (ctx: ChromeCtx) => {
     const paddedLabel = place.label.padEnd(Math.max(0, maxLabel)).slice(0, maxLabel);
 
     const iconSlot = ctx.makeIconSlot(place.icon, iconStates, 1, selectIconState(selected, false));
-    let ejectSlot: ReturnType<typeof ctx.makeIconSlot> | undefined;
+    let ejectSlot: IconSlotHandle<"select"> | undefined;
     const device = place.device;
     if (place.ejectable && device) {
       ejectSlot = ctx.makeIconSlot("eject", iconStates, 1, selectIconState(selected, false), (ev: MouseEvent) => {
@@ -597,7 +599,7 @@ export const makeChrome = (ctx: ChromeCtx) => {
         "close",
         closeStates(),
         1,
-        0,
+        ToggleIdx.Off,
         (ev: MouseEvent) => {
           try {
             ev.stopPropagation?.();

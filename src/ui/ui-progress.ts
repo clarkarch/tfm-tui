@@ -25,7 +25,8 @@ import {
   resetProgressState,
   stopProgressPhase,
 } from "../lib/file-op-protocol";
-import type { IconSpec } from "../lib/icon-state";
+import type { IconSpec, SetIconState } from "../lib/icon-state";
+import { PlainIdx, ToggleIdx } from "../lib/icon-state";
 
 // --- live copy progress: floating toast (top-right) with pause/cancel ---
 // Owns the `prog` state the transfer engine reports into, the throttled
@@ -40,7 +41,7 @@ export type ProgressCtx = {
   // live theme — always read through the getter, never captured
   colors(): Theme;
   makeIconSlot: MakeIconSlot;
-  setIconState(spec: IconSpec | undefined, stateIdx: number): boolean;
+  setIconState: SetIconState;
   drainIconQueue(): unknown;
   // toast shell — owned by ./notify (single stack)
   notifySticky(children: SlotElement[], opts?: { width?: number; height?: number }): ToastHandle | null;
@@ -226,16 +227,16 @@ export const makeProgress = (ctx: ProgressCtx) => {
       { fg: ctx.colors().white, bg: ctx.colors().accentBg },
       { fg: ctx.colors().white, bg: ctx.colors().hoverBg },
     ];
-    const progPaint = (spec: IconSpec | undefined, btnId: string, on: boolean) => {
+    const progPaint = (spec: IconSpec<"toggle"> | undefined, btnId: string, on: boolean) => {
       ctx.setIconState(spec, toggleIconState(on, false));
       try {
         const n = ctx.byId(btnId);
         if (n) applySurface(n, islandSurface(ctx.colors(), on, ctx.colors().accentBg));
       } catch {}
     };
-    const progPauseSpec = ctx.makeIconSlot("pause", progBtnStates(), 1, 0, undefined, progBtnStates);
-    const progPlaySpec = ctx.makeIconSlot("play", progBtnStates(), 1, 0, undefined, progBtnStates);
-    const progCloseSpec = ctx.makeIconSlot("close", progBtnStates(), 1, 0, undefined, progBtnStates);
+    const progPauseSpec = ctx.makeIconSlot("pause", progBtnStates(), 1, ToggleIdx.Off, undefined, progBtnStates);
+    const progPlaySpec = ctx.makeIconSlot("play", progBtnStates(), 1, ToggleIdx.Off, undefined, progBtnStates);
+    const progCloseSpec = ctx.makeIconSlot("close", progBtnStates(), 1, ToggleIdx.Off, undefined, progBtnStates);
     // ids live on the TEXT nodes — boxes have no .content, mutating them no-ops.
     // The shell (position, slide-in, stack slot) comes from notifySticky.
     // B1 media-object layout (same as notify): a 2-row verb icon owns the left
@@ -247,7 +248,7 @@ export const makeProgress = (ctx: ProgressCtx) => {
       progressIconFor(prog.verb),
       mediaStates(),
       TOAST_ICON_CELLS,
-      0,
+      PlainIdx.Rest,
       undefined,
       mediaStates,
     );

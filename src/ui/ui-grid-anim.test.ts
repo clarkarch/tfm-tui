@@ -893,7 +893,10 @@ describe("makeTileHoverAnim (engine)", () => {
       tileRefs: () => refs,
       colors: () => ({ hoverBg: "#3b4261", bg: "#1a1b26", sidebarFgMuted: "#565f89", white: "#ffffff" }) as any,
       uiStyle: () => "solid" as const,
-      setIconState: (_spec, idx) => void iconCalls.push(idx),
+      setIconState: (_spec, idx) => {
+        iconCalls.push(idx);
+        return true;
+      },
       isCutKey,
       hoverLiftOpts: () => ({
         enabled,
@@ -952,7 +955,7 @@ describe("makeTileHoverAnim (engine)", () => {
       tileRefs: () => refs,
       colors: () => ({ hoverBg: "#3b4261", bg: "#1a1b26", sidebarFgMuted: "#565f89", white: "#ffffff" }) as any,
       uiStyle: () => "solid" as const,
-      setIconState: () => {},
+      setIconState: () => true,
       hoverLiftOpts: () => ({
         enabled: true,
         ms: 0,
@@ -1006,7 +1009,7 @@ describe("makeTileHoverAnim (engine)", () => {
       tileRefs: () => refs,
       colors: () => ({ hoverBg: "#3b4261", bg: "#1a1b26", sidebarFgMuted: "#565f89", white: "#ffffff" }) as any,
       uiStyle: () => "solid" as const,
-      setIconState: () => {},
+      setIconState: () => true,
       hoverLiftOpts: () => ({
         enabled: true,
         ms: 120,
@@ -1225,7 +1228,7 @@ describe("makeTileHoverAnim (engine)", () => {
       tileRefs: () => refs,
       colors: () => ({ hoverBg: "#3b4261", bg: "#1a1b26", sidebarFgMuted: "#565f89", white: "#ffffff" }) as any,
       uiStyle: () => "solid" as const,
-      setIconState: () => {},
+      setIconState: () => true,
       hoverLiftOpts: () => ({
         enabled: true,
         ms: 120,
@@ -1252,7 +1255,7 @@ describe("makeTileHoverAnim (engine)", () => {
     expect(iconCalls.at(-1)).toBe(1); // hover shows the bright raster
     anim.playHover("/w/cut-cut", false);
     // the icon returns to the CUT raster (not plain Rest), the label re-dims
-    expect(iconCalls.at(-1)).toBe(3); // IconStateIdx.Cut
+    expect(iconCalls.at(-1)).toBe(3); // SelectIdx.Cut
     expect((byId("lab-cut-cut") as any).fg.toInts()).toEqual([86, 95, 137, 255]); // #565f89
     expect((byId("tile-cut-cut") as any).backgroundColor.toInts()).toEqual([...REST] as any);
   });
@@ -1298,7 +1301,7 @@ describe("makeTileHoverAnim (engine)", () => {
       tileRefs: () => refs,
       colors: () => ({ hoverBg: "#3b4261", bg: "#1a1b26", sidebarFgMuted: "#565f89", white: "#ffffff" }) as any,
       uiStyle: () => "solid" as const,
-      setIconState: () => {},
+      setIconState: () => true,
       hoverLiftOpts: () => ({
         enabled: true,
         ms: 0,
@@ -1346,7 +1349,7 @@ describe("makeTileHoverAnim (engine)", () => {
       tileRefs: () => refs,
       colors: () => ({ hoverBg: "#3b4261", bg: "#1a1b26", sidebarFgMuted: "#565f89", white: "#ffffff" }) as any,
       uiStyle: () => "solid" as const,
-      setIconState: () => {},
+      setIconState: () => true,
       hoverLiftOpts: () => ({
         enabled,
         ms: 0,

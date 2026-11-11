@@ -21,7 +21,7 @@ import type { SelTileRef } from "../input/selection";
 import { TileVisual } from "../input/grid-input";
 import { tileSurface } from "./style";
 
-import { IconStateIdx } from "../lib/icon-state";
+import { SelectIdx, type SelectIndex, type SetIconState } from "../lib/icon-state";
 import type { MaybeNode, NodeLike } from "../lib/node-like";
 
 export type FileAnimStyle = "off" | "fade" | "slide" | "stagger" | "stagger-slide";
@@ -37,7 +37,6 @@ export type SlideDir = "up" | "down" | "left" | "right";
 export const MAX_PER_NODE_ANIM = 1000;
 
 import { clamp01 } from "../lib/uiutil";
-import type { IconSpec } from "../lib/icon-state";
 
 const outQuad = (p: number): number => p * (2 - p);
 const smoothstep = (p: number): number => p * p * (3 - 2 * p);
@@ -558,7 +557,7 @@ type TileHoverCtx = {
   tileRefs(): Map<string, SelTileRef>;
   colors(): Theme;
   uiStyle(): UiStyle;
-  setIconState(spec: IconSpec | undefined, idx: number): void;
+  setIconState: SetIconState;
   // clipboard cut-dim resolution (mirrors selection.setTileVisual)
   isCutKey?(key: string): boolean;
   hoverLiftOpts(): HoverLiftOpts;
@@ -593,9 +592,9 @@ export const makeTileHoverAnim = (ctx: TileHoverCtx) => {
 
   // cut state is resolved like selection.setTileVisual: only unselected
   // clipboard tiles render dimmed
-  const restIconIdx = (refs: SelTileRef, key: string): number => {
+  const restIconIdx = (refs: SelTileRef, key: string): SelectIndex => {
     const cut = !refs.selected && ctx.isCutKey?.(key) === true;
-    return cut ? IconStateIdx.Cut : TileVisual.Rest;
+    return cut ? SelectIdx.Cut : TileVisual.Rest;
   };
   const restLabelFg = (refs: SelTileRef, key: string): string =>
     !refs.selected && ctx.isCutKey?.(key) === true ? ctx.colors().sidebarFgMuted : refs.baseFg;

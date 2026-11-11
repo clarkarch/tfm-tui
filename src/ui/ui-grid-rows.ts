@@ -22,7 +22,7 @@ import { sidePadDelta } from "./style";
 import type { GridRendererCtx } from "./ui-grid-types";
 import type { SlotElement } from "./ui-slots";
 import { visibleTileCap } from "./ui-grid-window";
-import type { IconSpec } from "../lib/icon-state";
+import { PlainIdx, SelectIdx, type IconSpec } from "../lib/icon-state";
 
 // thumbnail raster cap: files over this keep their icon (thumbPlanFor).
 // Module scope so thumbStatsChanged can mirror the same predicate.
@@ -173,7 +173,7 @@ export const makeGridBuilders = (ctx: GridRendererCtx) => {
         justifyContent: "center",
         backgroundColor: ctx.transparentForce?.() ? "transparent" : ctx.colors().bg,
       },
-      ctx.makeIconSlot(icon, [{ fg: ctx.colors().sidebarFgMuted, bg: ctx.colors().bg }], iconCells).el,
+      ctx.makeIconSlot(icon, [{ fg: ctx.colors().sidebarFgMuted, bg: ctx.colors().bg }], iconCells, PlainIdx.Rest).el,
       Box({ height: 1 }),
       ...lines.map((content, i) => Text({ content, fg: i === 0 ? ctx.colors().sidebarFgMuted : ctx.colors().divider })),
       Box({ width: slotW, height: 0 }),
@@ -233,7 +233,7 @@ export const makeGridBuilders = (ctx: GridRendererCtx) => {
     const { isVideo, stat, useThumb } = thumbPlanFor(entry, key);
 
     let slotId: string;
-    let iconSpec: IconSpec | undefined;
+    let iconSpec: IconSpec<"select"> | undefined;
     let iconSlotEl: SlotElement;
     if (useThumb) {
       slotId = ctx.nextIconId();
@@ -249,7 +249,7 @@ export const makeGridBuilders = (ctx: GridRendererCtx) => {
         entry.isDir ? "folder" : fileIconFor(entry.name),
         selection.tileStates(dim),
         ICON_CELLS_H,
-        0,
+        SelectIdx.Rest,
       );
       slotId = s.slotId;
       iconSpec = s.spec;
@@ -394,13 +394,18 @@ export const makeGridBuilders = (ctx: GridRendererCtx) => {
     const { isVideo, stat, useThumb } = thumbPlanFor(entry, key);
 
     let slotId: string;
-    let iconSpec: IconSpec | undefined;
+    let iconSpec: IconSpec<"select"> | undefined;
     let slotEl: SlotElement;
     if (useThumb) {
       slotId = ctx.nextIconId();
       slotEl = Box({ id: slotId, width: iconW, height: h, flexDirection: "row", justifyContent: "center" });
     } else {
-      const s = ctx.makeIconSlot(entry.isDir ? "folder" : fileIconFor(entry.name), selection.tileStates(dim), h, 0);
+      const s = ctx.makeIconSlot(
+        entry.isDir ? "folder" : fileIconFor(entry.name),
+        selection.tileStates(dim),
+        h,
+        SelectIdx.Rest,
+      );
       slotId = s.slotId;
       iconSpec = s.spec;
       slotEl = s.el;

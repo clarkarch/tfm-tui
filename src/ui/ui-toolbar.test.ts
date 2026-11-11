@@ -15,7 +15,7 @@ import {
 import { RECENT_URI } from "../fs/uri";
 import { archiveUri } from "../fs/archive-scheme";
 import type { MaybeNode } from "../lib/node-like";
-import type { IconSpec } from "../lib/icon-state";
+import { type IconSpec, NavIdx, PlainIdx } from "../lib/icon-state";
 
 describe("isNavigableTarget", () => {
   test("real dirs pass, files and missing paths fail", () => {
@@ -104,9 +104,9 @@ const mkToolbar = (
     canBack?: () => boolean;
     canFwd?: () => boolean;
     // the icon-slot state sink: the raster index painted for a slot
-    onIconState?: (spec: IconSpec, index: number) => void;
+    onIconState?: (spec: IconSpec<any> | undefined, index: number) => void;
     // the icon-slot factory sink: every slot this toolbar builds
-    onSlot?: (name: string, spec: IconSpec) => void;
+    onSlot?: (name: string, spec: IconSpec<any>) => void;
     // the app-wide path-editor registry (both panes join the same one)
     pathEditPeers?: PathEditPeer[];
     // virtual clock for the double-click window
@@ -125,11 +125,22 @@ const mkToolbar = (
     uiStyle: () => "solid",
     colors: () => COLORS,
     makeIconSlot: (name, states) => {
-      const spec: IconSpec = { slotId: `s-${name}`, name, heightCells: 1, states, initialState: 0, phase: "pending" };
+      // the fake serves EVERY family, so its spec is family-erased
+      const spec: IconSpec<any> = {
+        slotId: `s-${name}`,
+        name,
+        heightCells: 1,
+        states,
+        initialState: PlainIdx.Rest,
+        phase: "pending",
+      };
       hooks.onSlot?.(name, spec);
       return { el: null, slotId: spec.slotId, spec };
     },
-    setIconState: (spec, index) => hooks.onIconState?.(spec, index),
+    setIconState: (spec, index) => {
+      hooks.onIconState?.(spec, index);
+      return true;
+    },
     closeFileMenu: () => {},
     blurTerminal: () => {},
     navigate: hooks.navigate ?? (() => {}),
@@ -227,7 +238,10 @@ describe("the nav buttons", () => {
       const painted = new Map<string, number>();
       const tb = mkToolbar(t, "tfm-p0-", "/x/alpha", {
         canBack: () => true,
-        onIconState: (spec, index) => painted.set(spec.slotId, index),
+        onIconState: (spec, index) => {
+          if (!spec) return;
+          painted.set(spec.slotId, index);
+        },
       });
       const shell = tb.makeToolbarShell();
       t.renderer.root.add(shell);
@@ -285,7 +299,10 @@ describe("the nav buttons", () => {
       let canBack = false;
       const tb = mkToolbar(t, "tfm-p0-", "/x/alpha", {
         canBack: () => canBack,
-        onIconState: (spec, index) => painted.set(spec.slotId, index),
+        onIconState: (spec, index) => {
+          if (!spec) return;
+          painted.set(spec.slotId, index);
+        },
       });
       t.renderer.root.add(tb.makeToolbarShell());
       await t.renderOnce();
@@ -302,17 +319,55 @@ describe("the nav buttons", () => {
     }
   });
 
+  test("the nav family's index is INVERTED (enabled is the resting state)", async () => {
+    // The nav family (back/fwd) is the INVERSE sense of a toggle: an
+    // ENABLED button is the resting palette (index 0) and a DISABLED one is
+    // the muted palette (index 1). The old shared numeric space carried
+    // this as a separate helper with an inverted arithmetic, and nothing
+    // pinned WHICH index each sense meant — a flipped mapping painted the
+    // disabled button in the enabled palette (or the reverse) and the test
+    // suite stayed green because it only compared "changed" vs "unchanged".
+    const t = await createTestRenderer({ width: 200, height: 6 });
+    try {
+      const painted = new Map<string, number>();
+      let canBack = false;
+      const tb = mkToolbar(t, "tfm-p0-", "/x/alpha", {
+        canBack: () => canBack,
+        onIconState: (spec, index) => {
+          if (!spec) return;
+          painted.set(spec.slotId, index);
+        },
+      });
+      t.renderer.root.add(tb.makeToolbarShell());
+      await t.renderOnce();
+
+      // DISABLED is the muted palette — index 1, NOT the resting one
+      tb.refreshNav();
+      expect(painted.get("s-chevron-left")).toBe(Number(NavIdx.Disabled));
+      // ENABLED is the RESTING palette — index 0 (the inverse of a toggle,
+      // whose "on" is index 1)
+      canBack = true;
+      tb.refreshNav();
+      expect(painted.get("s-chevron-left")).toBe(Number(NavIdx.Enabled));
+    } finally {
+      await t.dispose(); // 0.6.0: destroy + await closed
+    }
+  });
+
   test("a dead button's late mouse-out paints nothing", async () => {
     // the old button's record is STALE after a rebuild: a late mouse-out
     // (the pointer leaves the dead node) must not paint the fresh button
     // with the dead record's raster spec
     const t = await createTestRenderer({ width: 200, height: 6 });
     try {
-      const calls: { spec: IconSpec; index: number }[] = [];
-      const specs: IconSpec[] = [];
+      const calls: { spec: IconSpec<any>; index: number }[] = [];
+      const specs: IconSpec<any>[] = [];
       const tb = mkToolbar(t, "tfm-p0-", "/x/alpha", {
         canBack: () => true,
-        onIconState: (spec, index) => calls.push({ spec, index }),
+        onIconState: (spec, index) => {
+          if (!spec) return;
+          calls.push({ spec, index });
+        },
         onSlot: (name, spec) => {
           if (name === "chevron-left") specs.push(spec);
         },
@@ -521,9 +576,17 @@ describe("renderCrumbs directory-change animation", () => {
         makeIconSlot: (name, states) => ({
           el: null,
           slotId: `s-${name}`,
-          spec: { slotId: `s-${name}`, name, heightCells: 1, states, initialState: 0, phase: "pending" },
+          // the fake serves EVERY family, so its spec is family-erased
+          spec: {
+            slotId: `s-${name}`,
+            name,
+            heightCells: 1,
+            states,
+            initialState: PlainIdx.Rest,
+            phase: "pending",
+          } as IconSpec<any>,
         }),
-        setIconState: () => {},
+        setIconState: () => true,
         closeFileMenu: () => {},
         blurTerminal: () => {},
         navigate: () => {},

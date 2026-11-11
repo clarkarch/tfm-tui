@@ -17,6 +17,7 @@ import type { MaybeNode } from "../lib/node-like";
 import type { PointerStyle } from "../lib/pointer";
 import type { MakeIconSlot } from "./ui-slots";
 import type { ListEntry } from "../lib/menu-entry";
+import { ActiveIdx } from "../lib/icon-state";
 
 // --- Floating menu widget: right-click context menu + the file-menu panel row
 // renderer. Ids tfm-filemenu / tfm-filemenu-panel stay byte-identical for
@@ -115,7 +116,7 @@ export const makeMenu = (ctx: MenuCtx) => {
                 { fg: colors.white, bg: colors.accentBg },
               ],
               1,
-              active ? 1 : 0,
+              active ? ActiveIdx.Active : ActiveIdx.Rest,
             ).el,
           ]
         : []),
@@ -130,7 +131,7 @@ export const makeMenu = (ctx: MenuCtx) => {
                 { fg: colors.white, bg: colors.accentBg },
               ],
               1,
-              active ? 1 : 0,
+              active ? ActiveIdx.Active : ActiveIdx.Rest,
             ).el,
           ]
         : entry.hintIcon
@@ -142,7 +143,7 @@ export const makeMenu = (ctx: MenuCtx) => {
                   { fg: colors.white, bg: colors.accentBg },
                 ],
                 1,
-                active ? 1 : 0,
+                active ? ActiveIdx.Active : ActiveIdx.Rest,
               ).el,
             ]
           : entry.hint
