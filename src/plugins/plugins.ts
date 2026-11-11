@@ -373,6 +373,29 @@ const discoverPlugins = (
   return out.sort((a, b) => (a.file < b.file ? -1 : 1));
 };
 
+// --- One plugin FILE's lifecycle state.
+//
+// The old shape was a flat record ({fp, hash, name}) whose MEANING depended
+// on which fields were fresh: a snap whose fp matched the disk meant
+// "loaded", a snap whose fp lagged behind meant "the live instance is the
+// OLD version — retry", and a MISSING snap meant "never loaded". Three
+// states in one shape, and every reader had to know which comparison had
+// been made to learn which state it was in.
+//
+// The state is explicit now:
+//
+//   "loaded" — the live instance runs exactly this content (fp/hash = the
+//              disk's), so an unchanged fp means "nothing to do".
+//   "failed" — the last attempt at this content failed; the next scan
+//              RETRIES it. An older instance may still be live: a failed
+//              reload keeps the old plugin running (the failure is
+//              reported, the plugin is not taken away).
+//
+// The NAME is deliberately NOT here: the live instance owns it, and the
+// loader joins the two by the instance's FILE — so a plugin that renames
+// itself on reload is still the one instance that gets retired.
+type PluginSnap = { state: "loaded"; fp: string; hash: string } | { state: "failed"; fp: string };
+
 export const makePluginRegistry = (deps: {
   dir: string;
   api: PluginApi;
@@ -390,9 +413,30 @@ export const makePluginRegistry = (deps: {
   const enabled = deps.enabled ?? true;
   const plugins: LoadedPlugin[] = [];
   const errors: string[] = [];
-  // main-path -> last-seen version; warned keys dedupe repeat toasts across
-  // rescans (a persistently broken plugin warns once per distinct version)
-  const snaps = new Map<string, { fp: string; hash: string; name: string }>();
+  // main-path -> the file's lifecycle state (see PluginSnap above)
+  const snaps = new Map<string, PluginSnap>();
+  // The warning dedupe is PER FILE: a file owns the content versions it has
+  // already warned about. The old shape was one flat Set of composite keys
+  // (`<path>|<version>`) cleaned by a PREFIX delete — a path prefix could
+  // wipe another file's keys, and a file that never LOADED (no snap) was
+  // never cleaned at all: its key outlived the file, so re-installing the
+  // same broken content was SILENT (no toast for a plugin that does not
+  // load). The owners are paths: a plugin file, or the plugins dir itself
+  // (the discovery warnings are about the dir's contents, not about one
+  // plugin's lifecycle).
+  const warned = new Map<string, Set<string>>();
+  const warnOnce = (owner: string, version: string, message: string): void => {
+    let versions = warned.get(owner);
+    if (!versions) {
+      versions = new Set();
+      warned.set(owner, versions);
+    }
+    if (versions.has(version)) return;
+    versions.add(version);
+    try {
+      warn(message);
+    } catch {}
+  };
   // one store instance per plugin name, shared across reloads and every
   // scopedApi — separate makePluginStore handles keep independent caches and
   // last-write-wins clobbers (P1-7). The cache is mtime-checked, so sharing
@@ -405,14 +449,6 @@ export const makePluginRegistry = (deps: {
       stores.set(name, s);
     }
     return s;
-  };
-  const warned = new Set<string>();
-  const warnOnce = (key: string, message: string): void => {
-    if (warned.has(key)) return;
-    warned.add(key);
-    try {
-      warn(message);
-    } catch {}
   };
 
   const loadOne = async (
@@ -692,23 +728,37 @@ export const makePluginRegistry = (deps: {
 
   const doScan = async (): Promise<PluginScanDiff> => {
     // one failed-load recorder: prune the staged dir (given), record + warn
-    // once per distinct version key (a repeat failure dedupes silently else)
-    const recordLoadError = (file: string, what: string, key: string, err: unknown, prune?: () => void): void => {
+    // once per distinct content version (a repeat failure dedupes silently
+    // else). The dedupe key is the FILE's: the file owns the versions it has
+    // already warned about.
+    const recordLoadError = (file: string, what: string, version: string, err: unknown, prune?: () => void): void => {
       prune?.();
       const message = `plugin ${path.basename(file)} ${what}: ${errMessage(err)}`;
       diff.errors.push(message);
-      warnOnce(key, message);
+      warnOnce(file, version, message);
     };
     const diff: PluginScanDiff = { added: [], removed: [], changed: [], errors: [] };
     const found = discoverPlugins(dir, {
-      warn: (m) => warnOnce(`discover:${m}`, m),
+      // the discovery warnings are about the DIR's contents, not about one
+      // plugin's lifecycle — the dir owns them
+      warn: (m) => warnOnce(dir, m, m),
       log: api.log,
     });
     const live = new Set(found.map((f) => f.file));
+    // A file that is GONE takes its warning keys with it: the dedupe belongs
+    // to the FILE, so re-installing the same broken content warns AGAIN (the
+    // user has to be told their plugin does not load). A file that never
+    // LOADED has no snap, so the removal sweep below never reached its key —
+    // the key outlived the file and the re-install was SILENT.
+    for (const owner of [...warned.keys()]) {
+      if (owner === dir) continue;
+      if (!live.has(owner)) warned.delete(owner);
+    }
     // rm a staged build dir when no live snap references its hash (failed
-    // loads must not litter plugin-build; P1-12).
+    // loads must not litter plugin-build; P1-12). Only a LOADED snap holds a
+    // live staged dir — a failed attempt's staged copy is litter.
     const pruneUnreferencedStage = (folderName: string, hash: string): void => {
-      for (const s of snaps.values()) if (s.hash === hash) return;
+      for (const s of snaps.values()) if (s.state === "loaded" && s.hash === hash) return;
       try {
         rmSync(path.join(pluginBuildDir(), `${folderName}-${hash}`), { recursive: true, force: true });
       } catch {}
@@ -716,21 +766,29 @@ export const makePluginRegistry = (deps: {
     // REMOVALS FIRST: a renamed folder is a NEW file, and loading it before
     // retiring the old name trips the duplicate check against the plugin's own
     // previous name (a load-late + misleading "duplicate plugin name" error).
-    for (const [file, snap] of [...snaps]) {
+    for (const file of [...snaps.keys()]) {
       if (live.has(file)) continue;
       snaps.delete(file);
-      const i = plugins.findIndex((p) => p.name === snap.name);
+      // the live instance is joined by its FILE (not by its name): the name
+      // lives in ONE place — the instance — so a plugin that renamed itself
+      // on reload is still the one instance that gets retired.
+      const i = plugins.findIndex((p) => p.file === file);
       if (i >= 0) {
         const [gone] = plugins.splice(i, 1);
-        if (gone) await runDeactivate(gone);
+        if (gone) {
+          await runDeactivate(gone);
+          diff.removed.push(gone.name);
+        }
       }
       // drop every staged build for the removed folder (uninstall/rename) so
       // $XDG_CACHE_HOME/tfm/plugin-build doesn't grow across install cycles
       pruneStagedFor(path.basename(path.dirname(file)));
-      diff.removed.push(snap.name);
-      for (const k of [...warned]) if (k.startsWith(file)) warned.delete(k);
     }
-    const seen = new Set(plugins.map((p) => p.name));
+    // "which names are taken" is ONE fact — the live instances' names. The
+    // old shape tracked it THREE times (the snap's name, the instance's name
+    // and a scan-local `seen` set kept in step by hand).
+    const nameTakenByOther = (file: string, name: string): boolean =>
+      plugins.some((p) => p.file !== file && p.name === name);
     for (const { file } of found) {
       const srcFolder = path.dirname(file);
       const mainBase = path.basename(file);
@@ -745,31 +803,41 @@ export const makePluginRegistry = (deps: {
         continue;
       }
       const prev = snaps.get(file);
-      if (prev && prev.fp === fp) continue;
+      // the fast path applies to a LOADED file only: a FAILED one must be
+      // retried (the old shape encoded that by leaving the snap's fp stale,
+      // which every reader had to know).
+      if (prev?.state === "loaded" && prev.fp === fp) continue;
       // warn key must change per content version, or repeat failures dedupe
       // against the first version's key and go silent (warnOnce).
       let hash: string;
       try {
         hash = hashPluginFolder(srcFolder);
       } catch (err) {
-        recordLoadError(file, "failed to reload", `${file}|${fp}|hash`, err);
+        snaps.set(file, { state: "failed", fp });
+        recordLoadError(file, "failed to reload", fp, err);
         continue;
       }
-      if (prev && hash === prev.hash) {
+      // the content is unchanged since the last SUCCESSFUL load — only the
+      // fingerprint moved (a touched file): nothing to do.
+      if (prev?.state === "loaded" && hash === prev.hash) {
         prev.fp = fp;
         continue;
       }
-      const vkey = `${file}|${hash}`;
-      if (!prev) {
+      // the live instance for this file (NONE = a first load; one = a
+      // reload). The join is by FILE, so a plugin that renamed itself is
+      // still the same instance.
+      const current = plugins.find((p) => p.file === file);
+      if (!current) {
         try {
           const staged = copyStagedPlugin(srcFolder, folderName, hash, mainBase);
-          const lp = await loadOne(staged, file, (name) => seen.has(name));
-          seen.add(lp.name);
+          const lp = await loadOne(staged, file, (name) => nameTakenByOther(file, name));
           plugins.push(lp);
-          snaps.set(file, { fp, hash, name: lp.name });
+          snaps.set(file, { state: "loaded", fp, hash });
           diff.added.push(lp.name);
         } catch (err) {
-          recordLoadError(file, "failed to load", vkey, err, () => pruneUnreferencedStage(folderName, hash));
+          // the file's state says the attempt failed — the next scan retries
+          snaps.set(file, { state: "failed", fp });
+          recordLoadError(file, "failed to load", hash, err, () => pruneUnreferencedStage(folderName, hash));
         }
         continue;
       }
@@ -784,25 +852,20 @@ export const makePluginRegistry = (deps: {
         const staged = copyStagedPlugin(srcFolder, folderName, hash, mainBase);
         // name change across reload: keep first-wins semantics (pre-empts
         // activate like the fresh-path duplicate check)
-        const lp = await loadOne(staged, file, (name) => name !== prev.name && seen.has(name));
-        const idx = plugins.findIndex((p) => p.name === prev.name);
-        const old = idx >= 0 ? plugins[idx] : undefined;
-        if (old) await runDeactivate(old);
-        if (idx >= 0) plugins.splice(idx, 1, lp);
-        else plugins.push(lp);
-        seen.delete(prev.name);
-        seen.add(lp.name);
-        prev.fp = fp;
-        prev.hash = hash;
-        prev.name = lp.name;
+        const lp = await loadOne(staged, file, (name) => nameTakenByOther(file, name));
+        const idx = plugins.indexOf(current);
+        await runDeactivate(current);
+        plugins.splice(idx, 1, lp);
+        snaps.set(file, { state: "loaded", fp, hash });
         diff.changed.push(lp.name);
         try {
           api.log(`plugin ${lp.name} reloaded`);
         } catch {}
       } catch (err) {
-        // fp intentionally left stale so the next rescan retries (transient
-        // errors self-heal); a real content change alters fp anyway.
-        recordLoadError(file, "failed to reload", vkey, err, () => pruneUnreferencedStage(folderName, hash));
+        // the state records the failure, so the next scan RETRIES it
+        // (transient errors self-heal); the old instance stays live.
+        snaps.set(file, { state: "failed", fp });
+        recordLoadError(file, "failed to reload", hash, err, () => pruneUnreferencedStage(folderName, hash));
       }
     }
     errors.length = 0;

@@ -739,6 +739,136 @@ describe("registry reload (no restart for add/remove)", () => {
   });
 });
 
+describe("the per-file lifecycle", () => {
+  const writeFolderPlugin = (dir: string, name: string, body: string): void => {
+    mkdirSync(path.join(dir, name), { recursive: true });
+    writeFileSync(path.join(dir, name, `${name}.ts`), body);
+  };
+
+  test("a broken plugin that is deleted and re-installed warns AGAIN", async () => {
+    // The warning dedupe belongs to the FILE: a file that never loaded has
+    // no snap, so the removal sweep never reached its dedupe key — the key
+    // outlived the file, and the re-install of the SAME broken content was
+    // SILENT (no toast for a plugin that does not load).
+    const dir = mkDir();
+    try {
+      const warns: string[] = [];
+      const reg = makePluginRegistry({ dir, api: mkApi(dir, []), warn: (m) => warns.push(m) });
+      const broken = `export default { name: "bad", activate: () => { throw new Error("boom"); } };\n`;
+      writeFolderPlugin(dir, "bad", broken);
+      await reg.scan();
+      expect(warns.length).toBe(1);
+      expect(warns[0]).toContain("failed to load");
+      // the user deletes the broken plugin …
+      rmSync(path.join(dir, "bad"), { recursive: true, force: true });
+      await reg.scan();
+      // … and installs the very same broken content again
+      writeFolderPlugin(dir, "bad", broken);
+      await reg.scan();
+      expect(reg.errors.length).toBe(1);
+      // the file is new again — the user must be told their plugin does not
+      // load (the old key belonged to a file that is gone)
+      expect(warns.length).toBe(2);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a failed reload is retried on the next scan", async () => {
+    // The stale-fp retry path: the live plugin is the OLD version while the
+    // disk holds a new one that failed to load. The next scan must ATTEMPT
+    // the reload again (a transient failure self-heals) — the activate
+    // counter is the observable, not the error list.
+    const dir = mkDir();
+    try {
+      const key = `__tfmPluginActivateCount_${process.pid}_${Date.now()}`;
+      const count = (): number => ((globalThis as Record<string, unknown>)[key] as number | undefined) ?? 0;
+      writeFolderPlugin(dir, "aaa", GOOD_A);
+      const reg = makePluginRegistry({ dir, api: mkApi(dir, []), warn: () => {} });
+      await reg.scan();
+      expect(reg.plugins.length).toBe(1);
+      expect(count()).toBe(0);
+      // break it: the reload fails and the old instance stays live
+      writeFolderPlugin(
+        dir,
+        "aaa",
+        `export default { name: "aaa", activate: () => { globalThis[${JSON.stringify(key)}] = (globalThis[${JSON.stringify(key)}] ?? 0) + 1; throw new Error("boom"); } };\n`,
+      );
+      const main = path.join(dir, "aaa", "aaa.ts");
+      const t = new Date(Date.now() + 5000);
+      utimesSync(main, t, t);
+      const first = await reg.scan();
+      expect(first.changed).toEqual([]);
+      expect(reg.errors.length).toBe(1);
+      expect(count()).toBe(1);
+      // the next scan attempts the reload AGAIN (the retry)
+      await reg.scan();
+      expect(count()).toBe(2);
+      expect(reg.errors.length).toBe(1);
+      delete (globalThis as Record<string, unknown>)[key];
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a plugin that renames itself on reload is retired when its file is removed", async () => {
+    // The loader joins a file's snap to its live instance by the FILE (the
+    // name lives in ONE place — the instance). A name-based join retires the
+    // WRONG instance (or none) once the plugin renamed itself.
+    const dir = mkDir();
+    try {
+      const reg = makePluginRegistry({ dir, api: mkApi(dir, []), warn: () => {} });
+      writeFolderPlugin(dir, "aaa", GOOD_A);
+      await reg.scan();
+      expect(reg.plugins.map((p) => p.name)).toEqual(["aaa"]);
+      // the plugin renames itself (the file keeps its name)
+      writeFolderPlugin(
+        dir,
+        "aaa",
+        `export default { name: "zzz", activate: () => ({ rows: [{ kind: "action", label: "hi-z", run: () => {} }] }) };\n`,
+      );
+      const main = path.join(dir, "aaa", "aaa.ts");
+      const t = new Date(Date.now() + 5000);
+      utimesSync(main, t, t);
+      await reg.scan();
+      expect(reg.plugins.map((p) => p.name)).toEqual(["zzz"]);
+      // the file goes away — the instance goes with it (the name no longer
+      // matches the file's basename)
+      rmSync(path.join(dir, "aaa"), { recursive: true, force: true });
+      const res = await reg.scan();
+      expect(res.removed).toEqual(["zzz"]);
+      expect(reg.plugins).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("one plugin's warning does not clear another's", async () => {
+    // the dedupe keys are PER FILE: removing one plugin must not wipe
+    // another file's key (the old cleanup deleted every key that STARTED
+    // with the removed path)
+    const dir = mkDir();
+    try {
+      const warns: string[] = [];
+      const reg = makePluginRegistry({ dir, api: mkApi(dir, []), warn: (m) => warns.push(m) });
+      writeFolderPlugin(dir, "aaa", GOOD_A);
+      writeFolderPlugin(dir, "bbb", `export default { name: "bbb", activate: () => { throw new Error("boom"); } };\n`);
+      await reg.scan();
+      expect(warns.length).toBe(1);
+      // remove the GOOD plugin — the broken one keeps its dedupe key
+      rmSync(path.join(dir, "aaa"), { recursive: true, force: true });
+      await reg.scan();
+      await reg.scan();
+      // the broken plugin still fails on every scan, but its warning was
+      // already said (the dedupe survived the neighbour's removal)
+      expect(warns.length).toBe(1);
+      expect(reg.errors.length).toBe(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("plugin extra menus", () => {
   test("sidebarMenu/emptyAreaMenu builders are collected per plugin", async () => {
     const dir = mkDir();
