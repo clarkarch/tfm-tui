@@ -54,23 +54,64 @@ describe("paintLine", () => {
 });
 
 describe("makePaintWatch", () => {
+  // a sample = the frame's counters + the renderer they came from. The
+  // session token is what makes "the same frame sampled twice" and "the
+  // first frame of a RESTARTED renderer" distinguishable — the frame id
+  // alone cannot (the id counter resets with the renderer).
+  const sessionA = { name: "renderer-a" };
+  const sessionB = { name: "renderer-b" };
+  const frame = (workFrameId: number, damageRows = 3): FrameWork => ({
+    damageRows,
+    fullPathReasons: 0,
+    rowsDiffed: damageRows,
+    workFrameId,
+  });
+
   test("a frame is reported once, even when sampled repeatedly", () => {
-    let work: FrameWork | null = { damageRows: 3, fullPathReasons: 0, rowsDiffed: 3, workFrameId: 1 };
-    const watch = makePaintWatch(() => work);
+    let work: FrameWork | null = frame(1);
+    const watch = makePaintWatch(() => {
+      const w = work;
+      return w ? { session: sessionA, work: w } : null;
+    });
     expect(watch.sample()?.damageRows).toBe(3);
     expect(watch.sample()).toBeNull(); // same frame, sampled again
-    work = { damageRows: 5, fullPathReasons: 0, rowsDiffed: 5, workFrameId: 2 };
+    work = frame(2, 5);
     expect(watch.sample()?.damageRows).toBe(5);
     expect(watch.last?.workFrameId).toBe(2);
   });
 
   test("an unavailable source reports nothing and keeps the last frame", () => {
-    let work: FrameWork | null = { damageRows: 4, fullPathReasons: 0, rowsDiffed: 4, workFrameId: 1 };
-    const watch = makePaintWatch(() => work);
+    let work: FrameWork | null = frame(1, 4);
+    const watch = makePaintWatch(() => {
+      const w = work;
+      return w ? { session: sessionA, work: w } : null;
+    });
     expect(watch.sample()?.damageRows).toBe(4);
     work = null;
     expect(watch.sample()).toBeNull();
     expect(watch.last?.damageRows).toBe(4);
+  });
+
+  test("a renderer restart does not skip the first frame of the new session", () => {
+    // The frame id counter is PER-RENDERER: a restarted renderer starts it
+    // over, so the new session's first frame can carry the SAME id the
+    // watch already saw. With the id alone as the "have I seen this frame?"
+    // answer, that frame was skipped — the new session's first paint never
+    // reached the trace, and `last` kept the OLD session's counters.
+    let session: unknown = sessionA;
+    let work: FrameWork | null = frame(0, 7);
+    const watch = makePaintWatch(() => (work ? { session, work } : null));
+
+    expect(watch.sample()?.damageRows).toBe(7); // the old session's frame 0
+    // the renderer restarts: the id counter resets, the first frame of the
+    // new session carries id 0 AGAIN
+    session = sessionB;
+    work = frame(0, 9);
+    const first = watch.sample();
+    expect(first).not.toBeNull(); // the new session's first frame is NEW
+    expect(first?.damageRows).toBe(9);
+    // and the watch's last frame is the new session's, not the old one's
+    expect(watch.last?.damageRows).toBe(9);
   });
 });
 
@@ -85,6 +126,7 @@ describe("BENIGN_FULL_PATH", () => {
 });
 
 describe("startPaintTrace", () => {
+  const session = { name: "renderer" };
   const harness = (frames: FrameWork[]) => {
     let i = -1;
     const logs: string[] = [];
@@ -96,7 +138,10 @@ describe("startPaintTrace", () => {
           fire = null;
         };
       },
-      source: () => (i >= 0 ? (frames[Math.min(i, frames.length - 1)] ?? null) : null),
+      source: () => {
+        const work = i >= 0 ? (frames[Math.min(i, frames.length - 1)] ?? null) : null;
+        return work ? { session, work } : null;
+      },
       log: (msg) => logs.push(msg),
     });
     return {

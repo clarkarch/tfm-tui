@@ -26,8 +26,21 @@ export type FrameWork = {
   workFrameId: number;
 };
 
-// Reads the last presented frame's counters; null when unavailable.
-export type FrameWorkSource = () => FrameWork | null;
+// A frame's counters PLUS the identity of the renderer that produced them.
+//
+// The frame id is PER-RENDERER: a renderer RESTART resets the counter, so
+// the id alone cannot tell "the same frame sampled twice" from "the first
+// frame of a new session" — both carry the same id. The session token is
+// what makes the two distinguishable.
+export type FrameSample = {
+  // the renderer's identity — a new renderer is a new session
+  readonly session: unknown;
+  readonly work: FrameWork;
+};
+
+// Reads the last presented frame's counters + the renderer they came from;
+// null when unavailable.
+export type FrameSampleSource = () => FrameSample | null;
 
 // OT_SCENE_FULL_PATH_* (packages/native/include/opentui.h) — why a frame took
 // the full repaint path instead of the damage-only path.
@@ -75,20 +88,28 @@ export type PaintWatch = {
   readonly sample: () => FrameWork | null;
 };
 
-export const makePaintWatch = (source: FrameWorkSource): PaintWatch => {
-  let last: FrameWork | null = null;
-  let seenId = -1;
+export const makePaintWatch = (source: FrameSampleSource): PaintWatch => {
+  // ONE record of what this watch has seen: the last SAMPLE — the frame AND
+  // the renderer it came from. The old shape kept TWO indicators of "have I
+  // seen a frame?": the last counters (`last`) AND a separate `seenId` with
+  // a magic `-1` "never seen" sentinel, and the frame id alone could not
+  // tell "the same frame sampled twice" from "the first frame of a
+  // RESTARTED renderer" (the id counter resets with the renderer) — so a
+  // restart skipped the new session's first frame and `last` kept the old
+  // session's counters.
+  let last: FrameSample | null = null;
   return {
     get last(): FrameWork | null {
-      return last;
+      return last?.work ?? null;
     },
     sample(): FrameWork | null {
-      const w = source();
-      if (!w) return null;
-      if (w.workFrameId === seenId) return null;
-      seenId = w.workFrameId;
-      last = w;
-      return w;
+      const s = source();
+      if (!s) return null;
+      const prev = last;
+      // the same frame of the same session, sampled again
+      if (prev && prev.session === s.session && prev.work.workFrameId === s.work.workFrameId) return null;
+      last = s;
+      return s.work;
     },
   };
 };
@@ -109,8 +130,8 @@ export type PaintTraceCtx = {
   // Subscribe to the renderer's per-presented-frame event. Returns the
   // unsubscribe.
   subscribe(onFrame: () => void): () => void;
-  // The last presented frame's counters.
-  source: FrameWorkSource;
+  // The last presented frame's counters + the renderer they came from.
+  source: FrameSampleSource;
   // Where the trace goes (the --debug log).
   log: (msg: string) => void;
 };

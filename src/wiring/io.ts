@@ -465,12 +465,20 @@ export const wireBoot = (deps: {
         },
         source: () => {
           try {
-            const w = chrome.renderer.getNativeStats().frameWork;
+            const r = chrome.renderer;
+            const w = r.getNativeStats().frameWork;
             return {
-              damageRows: w.damageRows,
-              fullPathReasons: w.fullPathReasons,
-              rowsDiffed: w.rowsDiffed,
-              workFrameId: w.workFrameId,
+              // the renderer's identity: the frame id counter is PER-RENDERER
+              // (a restart resets it), so the watch needs the session to tell
+              // "the same frame sampled twice" from "the first frame of a
+              // new renderer"
+              session: r,
+              work: {
+                damageRows: w.damageRows,
+                fullPathReasons: w.fullPathReasons,
+                rowsDiffed: w.rowsDiffed,
+                workFrameId: w.workFrameId,
+              },
             };
           } catch {
             return null;
