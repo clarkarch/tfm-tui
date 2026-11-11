@@ -124,7 +124,7 @@ describe("makeHoverDrawer (headless)", () => {
   afterAll(() => t.dispose()); // 0.6.0: destroy + await closed
 
   test("mouse near the left edge opens the sidebar; leaving collapses it", async () => {
-    const ui = {
+    const ui: UiConfig = {
       ...defaultConfig.ui,
       sidebarAutoHide: true,
       sidebarCollapseStyle: "rail",
@@ -164,7 +164,7 @@ describe("makeHoverDrawer (headless)", () => {
   });
 
   test("hidden collapse style makes the pane invisible instead of a width-0 leak", async () => {
-    const ui = {
+    const ui: UiConfig = {
       ...defaultConfig.ui,
       previewEnabled: true,
       previewAutoHide: true,
@@ -198,7 +198,7 @@ describe("makeHoverDrawer (headless)", () => {
     // it back made `cur === target` and the slide was skipped (a hidden pane
     // jumped straight to full width with no animation). Live loop, because
     // renderOnce's frame delta can complete the whole slide in one frame.
-    const ui = {
+    const ui: UiConfig = {
       ...defaultConfig.ui,
       previewEnabled: true,
       previewAutoHide: true,
@@ -237,7 +237,7 @@ describe("makeHoverDrawer (headless)", () => {
     // published the FINAL width the moment the slide started, so the column
     // math disagreed with the paint for the whole slide (the grid reserved
     // room for a panel that was still growing).
-    const ui = {
+    const ui: UiConfig = {
       ...defaultConfig.ui,
       sidebarAutoHide: true,
       sidebarCollapseStyle: "rail",
@@ -287,7 +287,7 @@ describe("makeHoverDrawer (headless)", () => {
     // flight are named by the phase (the old code carried `open` +
     // `initialized` + a loose timer, and `open` flipped before the slide
     // even started)
-    const ui = {
+    const ui: UiConfig = {
       ...defaultConfig.ui,
       sidebarAutoHide: true,
       sidebarCollapseStyle: "rail",
@@ -323,7 +323,7 @@ describe("makeHoverDrawer (headless)", () => {
     // the armed timer rides INSIDE the phase (the panel owns its pending
     // transition); a mouse that leaves the zone before the delay elapses must
     // cancel it — the panel stays collapsed
-    const ui = {
+    const ui: UiConfig = {
       ...defaultConfig.ui,
       sidebarAutoHide: true,
       sidebarCollapseStyle: "rail",
@@ -352,7 +352,7 @@ describe("makeHoverDrawer (headless)", () => {
 
   test("refresh applies collapse-style and auto-hide changes live", async () => {
     // the settings GUI / live config reload path: mutate ui() then refresh()
-    const ui = {
+    const ui: UiConfig = {
       ...defaultConfig.ui,
       sidebarAutoHide: true,
       sidebarCollapseStyle: "rail",
@@ -456,7 +456,7 @@ describe("terminal auto-hide follows ui().terminalHeight (headless)", () => {
 
   test("expand/collapse/restore size the host from live config, not the old const", async () => {
     // 9 ≠ the old TERM_H 12: every size below proves the config value is read
-    const ui = {
+    const ui: UiConfig = {
       ...defaultConfig.ui,
       terminalHeight: 9,
       terminalAutoHide: true,
@@ -505,7 +505,7 @@ describe("terminal auto-hide follows ui().terminalHeight (headless)", () => {
     // terminal pane set its own height when it opened): the first mouse move
     // SNAPS it — a scheduled transition would slide from the terminal's own
     // height instead, and the pane would drift for the whole slide
-    const ui = {
+    const ui: UiConfig = {
       ...defaultConfig.ui,
       terminalHeight: 9,
       terminalAutoHide: true,
@@ -542,7 +542,7 @@ describe("terminal auto-hide follows ui().terminalHeight (headless)", () => {
   test("a keyboard-focused terminal never collapses under auto-hide", async () => {
     // typing into a 1-row pane is the bug: focusing the shell must pin the
     // pane open until blur, even with the mouse far from the edge
-    const ui = {
+    const ui: UiConfig = {
       ...defaultConfig.ui,
       terminalHeight: 9,
       terminalAutoHide: true,

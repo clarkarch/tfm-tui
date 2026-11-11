@@ -181,7 +181,7 @@ export type Theme = {
   ansi15: string;
 };
 
-type ViewMode = "grid" | "list";
+type ViewMode = EnumValues<"viewMode">;
 
 // modal backdrop mode ([ui] scrim): how the app dims when a floating modal
 // (esc menu, props, conflict, pick…) is open. `dim` fades the app content over
@@ -189,16 +189,16 @@ type ViewMode = "grid" | "list";
 // RGBA(0,0,0,150) overlay; the overlay itself is gone because a full-screen
 // fill made OpenTUI delete every raster it covered); `none` leaves the
 // background. Icon rasters stay crisp under both dim modes.
-export type ScrimMode = "dim" | "fill" | "none";
+export type ScrimMode = EnumValues<"scrimMode">;
 
 // line-wrap vocabulary ([ui] wrap-mode): how over-long lines render
 // everywhere (grid tile labels, code preview, markdown). none cuts,
 // char slices mid-token, word breaks at spaces (spaceless runs still slice).
-export type WrapMode = "none" | "char" | "word";
+export type WrapMode = EnumValues<"wrapMode">;
 
 // surface-style vocabulary — the ui-style key's value type. The solid/outline
 // painting decisions live in ./style (the surface seam), which re-exports this.
-export type UiStyle = "solid" | "outline" | "outline-partial";
+export type UiStyle = EnumValues<"uiStyle">;
 
 // tile hover controls ([ui] file-hover-*). The ms/travel/dir/ease grammar is
 // shared with the entrance animations (ms = duration, slide-cells = travel,
@@ -206,13 +206,15 @@ export type UiStyle = "solid" | "outline" | "outline-partial";
 // low-level timing knobs. ms 0 = snap (the historical behavior — a tween would
 // lag a fast mouse sweep); a positive ms glides over `travel` cells. A tile
 // only moves when it has room; the rest keep the highlight.
-export type HoverLiftDirection = "up" | "down" | "left" | "right";
+export type HoverLiftDirection = EnumValues<"fileHoverSlideDir">;
 export type HoverLiftOpts = {
   enabled: boolean;
   ms: number;
   slideCells: number;
   direction: HoverLiftDirection;
-  ease: string;
+  // the ease is the CONFIG's own legal set (the same set the tween takes) —
+  // a bare `string` here let a bogus ease reach the tween behind a cast.
+  ease: EnumValues<"fileHoverEase">;
   includeLabel: boolean;
 };
 
@@ -220,13 +222,13 @@ export type HoverLiftOpts = {
 // hover. Rows are one cell tall with icons in a shared column, so a vertical
 // nudge would always paint over a neighbour's icon — only the horizontal pair
 // is offered (the one deliberate difference from the tile direction set).
-export type SidebarHoverDirection = "left" | "right";
+export type SidebarHoverDirection = EnumValues<"sidebarHoverSlideDir">;
 export type SidebarHoverOpts = {
   enabled: boolean;
   ms: number;
   slideCells: number;
   direction: SidebarHoverDirection;
-  ease: string;
+  ease: EnumValues<"sidebarHoverEase">;
   includeLabel: boolean;
 };
 
@@ -236,32 +238,32 @@ export type SidebarHoverOpts = {
 // keeps the faithful theme hex and leaves the renderer transparent (panels
 // still paint their fills); `force` additionally clears every chrome rest
 // fill so the terminal bg shows through regardless of the preset's bg.
-export type TransparentBgMode = "off" | "on" | "force";
+export type TransparentBgMode = EnumValues<"transparentBg">;
 // icon-raster mode. `opaque` flattens every icon onto its surface bg
 // (default); `transparent` keeps alpha everywhere (may fringe on some
 // terminals); `transparent-partial` keeps alpha except inside FLOATING layers
 // (menus/dialogs), whose rasters flatten so an opaque island never blends the
 // desktop through.
-export type IconMode = "opaque" | "transparent" | "transparent-partial";
+export type IconMode = EnumValues<"icons">;
 // what the block above the places sidebar shows. `tfm` = the original block
 // (accent ASCII wordmark + tagline); `files` = the same wordmark style spelling
 // "Files" in the sidebar white, no tagline; `none` = the block keeps its rows
 // but paints nothing. Was a bool (true = wordmark, false = none) — a boolean
 // value still migrates.
-export type SidebarTitleMode = "tfm" | "files" | "none";
+export type SidebarTitleMode = EnumValues<"sidebarTitle">;
 
 // icon-raster style. `filled` = solid icon rasters (default); `outline` =
 // hollow icon rasters where the set ships an outline sibling (icons with no
 // outline variant — power, sort, pause, content-*, chevrons, … — stay filled,
 // as do close/check whose MDI "outlines" are different busy icons).
-export type IconStyle = "filled" | "outline";
+export type IconStyle = EnumValues<"iconStyle">;
 
 // tty mode for the Linux console / dumb terminals (no kitty graphics, no
 // Nerd-Font PUA): forces list view + ASCII glyphs + no rasters/thumbs and
 // paints one STATIC console palette (dark/light by configured-bg brightness —
 // user [theme] hues are ignored, the VT can't show them). Text-cell anims stay
 // on. `auto` follows the TERM prefix (same rule as gpm mouse), `on`/`off` override.
-export type TtyMode = "auto" | "on" | "off";
+export type TtyMode = EnumValues<"ttyMode">;
 
 export type UiConfig = {
   sidebarWidth: number;
@@ -277,11 +279,11 @@ export type UiConfig = {
   terminalHeight: number;
   dualPane: boolean;
   sidebarAutoHide: boolean;
-  sidebarCollapseStyle: string;
+  sidebarCollapseStyle: EnumValues<"sidebarCollapseStyle">;
   previewAutoHide: boolean;
-  previewCollapseStyle: string;
+  previewCollapseStyle: EnumValues<"previewCollapseStyle">;
   terminalAutoHide: boolean;
-  terminalCollapseStyle: string;
+  terminalCollapseStyle: EnumValues<"terminalCollapseStyle">;
   hoverZoneCells: number;
   hoverOpenDelayMs: number;
   hoverCloseDelayMs: number;
@@ -314,12 +316,12 @@ export type UiConfig = {
   listRowHeight: number;
   wrapMode: WrapMode;
   fileAnimation: boolean;
-  fileAnimationStyle: string;
+  fileAnimationStyle: EnumValues<"fileAnimationStyle">;
   fileAnimationMs: number;
   fileAnimationStaggerPct: number;
   fileAnimationSlideCells: number;
-  fileAnimationSlideDir: string;
-  fileAnimationEase: string;
+  fileAnimationSlideDir: EnumValues<"fileAnimationSlideDir">;
+  fileAnimationEase: EnumValues<"fileAnimationEase">;
   fileAnimationScrollRevealDelayMs: number;
   fileAnimationContainerFade: boolean;
   fileAnimationVisibleOnly: boolean;
@@ -336,36 +338,36 @@ export type UiConfig = {
   fileHoverMs: number;
   fileHoverSlideCells: number;
   fileHoverSlideDir: HoverLiftDirection;
-  fileHoverEase: string;
+  fileHoverEase: EnumValues<"fileHoverEase">;
   fileHoverIncludeLabel: boolean;
   sidebarAnimation: boolean;
-  sidebarAnimationStyle: string;
+  sidebarAnimationStyle: EnumValues<"sidebarAnimationStyle">;
   sidebarAnimationMs: number;
   sidebarAnimationSlideCells: number;
-  sidebarAnimationSlideDir: string;
+  sidebarAnimationSlideDir: EnumValues<"sidebarAnimationSlideDir">;
   sidebarAnimationStaggerPct: number;
-  sidebarAnimationEase: string;
+  sidebarAnimationEase: EnumValues<"sidebarAnimationEase">;
   sidebarAnimationIncludeTitle: boolean;
   sidebarHoverAnimation: boolean;
   sidebarHoverMs: number;
   sidebarHoverSlideCells: number;
   sidebarHoverSlideDir: SidebarHoverDirection;
-  sidebarHoverEase: string;
+  sidebarHoverEase: EnumValues<"sidebarHoverEase">;
   sidebarHoverIncludeLabel: boolean;
   topbarAnimation: boolean;
-  topbarAnimationStyle: string;
+  topbarAnimationStyle: EnumValues<"topbarAnimationStyle">;
   topbarAnimationMs: number;
   topbarAnimationSlideCells: number;
-  topbarAnimationSlideDir: string;
+  topbarAnimationSlideDir: EnumValues<"topbarAnimationSlideDir">;
   topbarAnimationStaggerPct: number;
-  topbarAnimationEase: string;
+  topbarAnimationEase: EnumValues<"topbarAnimationEase">;
   directoryBarAnimation: boolean;
-  directoryBarAnimationStyle: string;
+  directoryBarAnimationStyle: EnumValues<"directoryBarAnimationStyle">;
   directoryBarAnimationMs: number;
   directoryBarAnimationSlideCells: number;
-  directoryBarAnimationSlideDir: string;
+  directoryBarAnimationSlideDir: EnumValues<"directoryBarAnimationSlideDir">;
   directoryBarAnimationStaggerPct: number;
-  directoryBarAnimationEase: string;
+  directoryBarAnimationEase: EnumValues<"directoryBarAnimationEase">;
   smoothScrolling: boolean;
   smoothScrollMs: number;
   checkUpdates: boolean;
@@ -530,7 +532,16 @@ type SchemaRow =
       unit?: string;
     })
   | (RowCommon & { kind: "bool"; section: "ui"; def: boolean; blurb: string })
-  | (RowCommon & { kind: "enum"; section: "ui"; values: readonly string[]; def: string; blurb: string })
+  | (RowCommon & {
+      kind: "enum";
+      section: "ui";
+      // the legal values — a NON-EMPTY tuple: the mode props' types are
+      // derived from it (`typeof UI_ROWS[N]["values"][number]`), so an empty
+      // set would derive `never`.
+      values: readonly [string, ...string[]];
+      def: string;
+      blurb: string;
+    })
   | (RowCommon & { kind: "key"; section: "keys"; action: KeyAction; def: string[]; blurb: string })
   | (RowCommon & { kind: "hex"; section: "theme"; def: string; group?: undefined });
 
@@ -538,7 +549,12 @@ type KeyRow = Extract<SchemaRow, { kind: "key" }>;
 type ThemeRow = Extract<SchemaRow, { kind: "hex" }>;
 export type UiSchemaRow = Extract<SchemaRow, { section: "ui" }>;
 
-const UI_ROWS: SchemaRow[] = [
+// the [ui] rows — ONE source of truth for every config key (the parser,
+// the serializer, the settings GUI and the config PROP TYPES all read this
+// table). `as const satisfies` keeps each row's LITERAL types (the legal
+// `values` tuples) so the mode props' types can be DERIVED from them; the
+// widened `UI_SCHEMA` export is what consumers see.
+const UI_ROWS = [
   {
     kind: "enum",
     section: "ui",
@@ -2061,7 +2077,7 @@ const UI_ROWS: SchemaRow[] = [
     group: "advanced",
     restart: true,
   },
-];
+] as const satisfies readonly SchemaRow[];
 
 // [theme] keys are camelCase in TOML (matches the Theme type) and are NOT
 // shown as individual GUI rows — the settings panel exposes theme presets.
@@ -2208,18 +2224,33 @@ const KEY_ROWS: KeyRow[] = (
 
 export const SCHEMA: SchemaRow[] = [...UI_ROWS, ...THEME_ROWS, ...KEY_ROWS];
 
-export const UI_SCHEMA = UI_ROWS;
+// the widened view for consumers (the literal row types live inside the
+// module — the derived prop types below read them): the widened shape keeps
+// the OPTIONAL row fields optional (`restart`, `gate`, …), which the literal
+// tuple cannot express (a field a row does not carry simply does not exist
+// on that member of the union).
+export const UI_SCHEMA: readonly SchemaRow[] = UI_ROWS;
 export const KEY_SCHEMA = KEY_ROWS;
+
+// the schema's literal row types — the legal `values` tuples survive here,
+// which is what makes the mode prop types DERIVABLE (see EnumValues).
+export type UiRow = (typeof UI_ROWS)[number];
+type EnumRow = Extract<UiRow, { kind: "enum" }>;
+// the legal values of an enum row, as a type: the ONE source of truth for a
+// mode prop's type. A bare `string` prop type let a consumer write
+// `cfg.ui.fileAnimationEase === "ease-in"` and COMPILE — the legal set was a
+// runtime array nobody could see at the type level.
+export type EnumValues<P extends EnumRow["prop"]> = Extract<EnumRow, { prop: P }>["values"][number];
 
 // the props whose ADJUSTMENT can make a gated row appear or disappear —
 // derived from the schema's own gates, so a new gated row joins the set by
 // construction (the panel's rebuild set used to be a hand-kept list).
 export const GATED_MASTERS: ReadonlySet<string> = new Set(
-  UI_ROWS.flatMap((r) => (r.gate ? gateTerms(r.gate).map((t) => t.prop) : [])),
+  UI_SCHEMA.flatMap((r) => (r.gate ? gateTerms(r.gate).map((t) => t.prop) : [])),
 );
 
 export const defaultConfig: Config = {
-  ui: Object.fromEntries(UI_ROWS.map((r) => [r.prop, r.def])),
+  ui: Object.fromEntries(UI_SCHEMA.map((r) => [r.prop, r.def])),
   theme: Object.fromEntries(THEME_ROWS.map((r) => [r.prop, r.def])),
   keys: Object.fromEntries(KEY_ROWS.map((r) => [r.prop, [...r.def]])),
 } as Config;
@@ -2376,8 +2407,8 @@ const valueFor = (cfg: Config, row: SchemaRow): string | number | boolean | stri
 // regenerated — smol-toml can't round-trip comments, but the schema knows
 // them. Column-aligned within each section.
 export function serializeBody(cfg: Config): string {
-  const sections: Array<{ name: string; rows: SchemaRow[] }> = [
-    { name: "ui", rows: UI_ROWS },
+  const sections: Array<{ name: string; rows: readonly SchemaRow[] }> = [
+    { name: "ui", rows: UI_SCHEMA },
     { name: "theme", rows: THEME_ROWS },
     { name: "keys", rows: KEY_ROWS },
   ];

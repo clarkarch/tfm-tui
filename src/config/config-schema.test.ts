@@ -15,11 +15,31 @@ import {
   serializeConfig,
   swapKeybind,
   type Config,
+  type EnumValues,
+  type UiConfig,
 } from "./config-schema";
 import { presetKeys } from "./keymap-presets";
 import { keySpecEqual, validateKeybindSpec } from "./keyspec";
 import { RENDER_EXEMPT } from "./render-exempt";
 import { readFileSync } from "node:fs";
+import type { SortMode } from "../lib/sort";
+
+// --- type-level pins (the TYPECHECKER is the runner here) ---
+// The mode props' types are DERIVED from their schema rows. A hand-written
+// union could drift from the row's legal set, and the drift is invisible at
+// runtime (the parser accepts the ROW's set), so the equality is asserted
+// here: a false condition is a typecheck error.
+type Same<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
+type Expect<T extends true> = T;
+export type _EasePropIsTheRowSet = Expect<Same<UiConfig["fileAnimationEase"], EnumValues<"fileAnimationEase">>>;
+export type _CollapsePropIsTheRowSet = Expect<
+  Same<UiConfig["sidebarCollapseStyle"], EnumValues<"sidebarCollapseStyle">>
+>;
+// the sort mode is the ONE mode whose type lives in a LEAF (lib/sort.ts —
+// fs/ and app/ need it without importing config/), so it cannot be derived
+// FROM the schema (that would invert the layering). The two copies must
+// agree, and THIS pin is what keeps them honest.
+export type _SortModeRowMatchesTheLeafUnion = Expect<Same<EnumValues<"sortMode">, SortMode>>;
 
 describe("parseConfigDoc", () => {
   test("empty doc = all defaults", () => {
@@ -361,6 +381,62 @@ describe("schema invariants", () => {
     }
   });
 
+  test("every enum row's legal set is non-empty and duplicate-free", () => {
+    // The prop types are DERIVED from these sets, so an empty set would
+    // derive `never` (every assignment an error) and a repeat would put a
+    // duplicate in the union (the legal set and the type would disagree).
+    for (const row of UI_SCHEMA) {
+      if (row.kind !== "enum") continue;
+      expect(row.values.length, `ui.${row.prop} has no legal values`).toBeGreaterThan(0);
+      expect(new Set(row.values).size, `ui.${row.prop} repeats a legal value`).toBe(row.values.length);
+    }
+  });
+
+  test("every enum prop's parsed value is inside its row's legal set (the type is honest)", () => {
+    // The derived prop type says a mode prop can only hold its row's legal
+    // values — that is a RUNTIME claim too: the parser REJECTS an unknown
+    // value (it keeps the row's default), so a hand-edited TOML can never
+    // put a mode prop outside its own legal set. Without this, the type
+    // would be a promise the parser does not keep.
+    for (const row of UI_SCHEMA) {
+      if (row.kind !== "enum") continue;
+      const cfg = parseConfigDoc({ ui: { [row.tomlKey]: "definitely-not-a-mode" } });
+      const value = (cfg.ui as unknown as Record<string, unknown>)[row.prop];
+      expect(row.values, `ui.${row.prop} holds a value outside its legal set`).toContain(value as string);
+    }
+  });
+
+  test("a config mode prop is not a bare string (a bogus mode does not type-check)", () => {
+    // The animation/collapse modes were typed `string`: a consumer could
+    // write `cfg.ui.fileAnimationEase === "ease-in"` and COMPILE — the legal
+    // set was a runtime array nobody could see at the type level. The legal
+    // set is the schema ROW's `values` (the one source of truth), so the
+    // prop type is derived from it. The @ts-expect-error directives are the
+    // pin: an UNUSED directive is a typecheck error.
+    const ui = { ...defaultConfig.ui };
+    // @ts-expect-error "ease-in" is not a legal file-animation ease
+    ui.fileAnimationEase = "ease-in";
+    // @ts-expect-error "bogus" is not a legal sidebar collapse style
+    ui.sidebarCollapseStyle = "bogus";
+    // @ts-expect-error "left" is not a legal terminal collapse style
+    ui.terminalCollapseStyle = "left";
+    // @ts-expect-error "sideways" is not a legal topbar animation direction
+    ui.topbarAnimationSlideDir = "sideways";
+    // the copy was mutated; the shared default is untouched
+    expect(defaultConfig.ui.fileAnimationEase).toBe("ease-out");
+    expect(defaultConfig.ui.sidebarCollapseStyle).toBe("hidden");
+  });
+
+  test("every mode prop's type IS its row's legal set (derived, not hand-written)", () => {
+    // A hand-written union could drift from the row's legal set, and the
+    // drift is invisible at runtime (the parser accepts the ROW's set). The
+    // type-level assertion below is the pin: it fails the typecheck when
+    // the two disagree.
+    const ui = { ...defaultConfig.ui };
+    // @ts-expect-error the derived type is the row's union, so "nope" is out
+    ui.fileHoverEase = "nope";
+    expect(Object.keys(defaultConfig.ui).length).toBeGreaterThan(0);
+  });
   test("RENDER_EXEMPT names are real [ui] keys (a typo exempts nothing)", () => {
     // A name that is not a config key silently exempts NOTHING: the knob
     // rebuilds the world on every stepper click (native-alloc churn) and the

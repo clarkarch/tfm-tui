@@ -24,7 +24,7 @@ import {
 } from "../input/grid-input";
 import { dragKeys, dragState } from "../lib/drag-state";
 import { makeGridRenderer } from "../ui/ui-grid";
-import { type EaseKey, fileAnimStyleFrom, makeFileAnim, makeTileHoverAnim, type SlideDir } from "../ui/ui-grid-anim";
+import { fileAnimStyleFrom, makeFileAnim, makeTileHoverAnim } from "../ui/ui-grid-anim";
 import { makeSmoothGlide, makeWheelSmoother } from "../ui/ui-smooth-scroll";
 import { makeProps } from "../ui/ui-props";
 import { makeMenuEntries } from "../ui/menu-entries";
@@ -283,8 +283,8 @@ export const wireGrid = (deps: {
         ms: core.config.ui.fileAnimationMs,
         staggerPct: core.config.ui.fileAnimationStaggerPct,
         slideCells: core.config.ui.fileAnimationSlideCells,
-        dir: core.config.ui.fileAnimationSlideDir as SlideDir,
-        ease: core.config.ui.fileAnimationEase as EaseKey,
+        dir: core.config.ui.fileAnimationSlideDir,
+        ease: core.config.ui.fileAnimationEase,
         containerFade: core.config.ui.fileAnimationContainerFade,
         rowsGranularity: core.config.ui.fileAnimationRowGranularity,
         maxFiles: core.config.ui.fileAnimationMaxFiles,

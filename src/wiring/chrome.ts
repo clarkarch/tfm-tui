@@ -29,8 +29,6 @@ import { rasterSigOf } from "../ui/tty";
 import { backgroundClearColor, bootClearColor } from "../ui/scrim";
 import { makeSidebarAnim, makeTopbarAnim } from "../ui/ui-sidebar-anim";
 import { makeSidebarHover } from "../ui/ui-sidebar-hover";
-import type { SidebarHoverDirection } from "../config/config-schema";
-import type { EaseKey, SlideDir } from "../ui/ui-grid-anim";
 import { makeRecentOpen } from "../fs/recent-open";
 import { classifyPath } from "../fs/executable";
 import { makeEnsureSudo } from "../fs/elevate";
@@ -232,7 +230,7 @@ export const wireChrome = async (deps: {
       enabled: core.config.ui.sidebarHoverAnimation,
       ms: core.config.ui.sidebarHoverMs,
       slideCells: core.config.ui.sidebarHoverSlideCells,
-      direction: core.config.ui.sidebarHoverSlideDir as SidebarHoverDirection,
+      direction: core.config.ui.sidebarHoverSlideDir,
       ease: core.config.ui.sidebarHoverEase,
       includeLabel: core.config.ui.sidebarHoverIncludeLabel,
     }),
@@ -396,9 +394,9 @@ export const wireChrome = async (deps: {
       style: core.config.ui.sidebarAnimationStyle,
       ms: core.config.ui.sidebarAnimationMs,
       slideCells: core.config.ui.sidebarAnimationSlideCells,
-      dir: core.config.ui.sidebarAnimationSlideDir as SlideDir,
+      dir: core.config.ui.sidebarAnimationSlideDir,
       staggerPct: core.config.ui.sidebarAnimationStaggerPct,
-      ease: core.config.ui.sidebarAnimationEase as EaseKey,
+      ease: core.config.ui.sidebarAnimationEase,
       includeTitle: core.config.ui.sidebarAnimationIncludeTitle,
     }),
     rootId: () => "tfm-sidebar-root",
@@ -438,9 +436,9 @@ export const wireChrome = async (deps: {
       style: core.config.ui.topbarAnimationStyle,
       ms: core.config.ui.topbarAnimationMs,
       slideCells: core.config.ui.topbarAnimationSlideCells,
-      dir: core.config.ui.topbarAnimationSlideDir as SlideDir,
+      dir: core.config.ui.topbarAnimationSlideDir,
       staggerPct: core.config.ui.topbarAnimationStaggerPct,
-      ease: core.config.ui.topbarAnimationEase as EaseKey,
+      ease: core.config.ui.topbarAnimationEase,
     }),
     barIds: () => [...toolbarItemIds(byId, "tfm-p0-"), ...toolbarItemIds(byId, "tfm-p1-")],
   });
@@ -460,9 +458,9 @@ export const wireChrome = async (deps: {
         style: core.config.ui.directoryBarAnimationStyle,
         ms: core.config.ui.directoryBarAnimationMs,
         slideCells: core.config.ui.directoryBarAnimationSlideCells,
-        dir: core.config.ui.directoryBarAnimationSlideDir as SlideDir,
+        dir: core.config.ui.directoryBarAnimationSlideDir,
         staggerPct: core.config.ui.directoryBarAnimationStaggerPct,
-        ease: core.config.ui.directoryBarAnimationEase as EaseKey,
+        ease: core.config.ui.directoryBarAnimationEase,
       }),
       barIds: () => crumbItemIds(byId, `tfm-p${pane}-`),
     });

@@ -794,7 +794,7 @@ export const makeTileHoverAnim = (ctx: TileHoverCtx) => {
       // duration glides in over `travel` cells (under a 1-cell travel the
       // whole-cell rounding makes the tween a snap too — pick travel > 1)
       if (lift && opts.ms > 0) {
-        tween.run(opts.ms, opts.ease as EaseKey, 0, 1, writeAt);
+        tween.run(opts.ms, opts.ease, 0, 1, writeAt);
       } else {
         tween.stop();
         writeAt(1);

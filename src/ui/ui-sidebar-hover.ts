@@ -14,7 +14,7 @@
 // row was never lifted). No external "a rebuild happened" call is needed.
 // No timeline: a whole-cell translate cannot tween. ---
 
-import { hoverOffset, makeHoverTween, type EaseKey } from "./ui-grid-anim";
+import { hoverOffset, makeHoverTween } from "./ui-grid-anim";
 import type { SidebarHoverOpts } from "../config/config-schema";
 import type { MaybeNode } from "../lib/node-like";
 import type { CliRenderer } from "@opentui/core";
@@ -157,7 +157,7 @@ export const makeSidebarHover = (ctx: SidebarHoverCtx) => {
         writeLift(st.refs, Math.round(off.dx * p), Math.round(off.dy * p), opts.includeLabel);
       };
       if (opts.ms > 0) {
-        tween.run(opts.ms, opts.ease as EaseKey, 0, 1, (p) => writeAt(p));
+        tween.run(opts.ms, opts.ease, 0, 1, (p) => writeAt(p));
       } else {
         tween.stop();
         writeAt(1);
