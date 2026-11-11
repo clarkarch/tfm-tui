@@ -9,7 +9,7 @@
 // leaf with the loader), .tmp staging dirs are dot-prefixed so the rescan
 // skips them. ---
 
-import { errMessage } from "../lib/uiutil";
+import { errMessage, type Scheduler } from "../lib/uiutil";
 import {
   cpSync,
   existsSync,
@@ -142,45 +142,120 @@ export const findPluginMains = (root: string): string[] => {
   return out;
 };
 
-// production spawn: array argv (no shell), piped output, 120s kill cap.
-// Never throws — failures arrive as non-zero exit (callers surface output).
-const defaultExec: ExecFn = async (cmd, args, opts) => {
-  try {
-    const proc = Bun.spawn([cmd, ...args], {
-      cwd: opts?.cwd,
-      stdout: "pipe",
-      stderr: "pipe",
-      stdin: "ignore",
-    });
-    let escalateTimer: ReturnType<typeof setTimeout> | undefined;
-    const timer = setTimeout(() => {
-      try {
-        proc.kill();
-      } catch {}
-      // escalation: a SIGTERM-immune hung git must not hold `exited` (and the
-      // install UI) forever — SIGKILL follows after a grace period
-      escalateTimer = setTimeout(() => {
-        try {
-          proc.kill("SIGKILL");
-        } catch {}
-      }, 5_000);
-    }, 120_000);
-    try {
-      const [out, err, exit] = await Promise.all([
-        new Response(proc.stdout).text(),
-        new Response(proc.stderr).text(),
-        proc.exited,
-      ]);
-      const output = `${out}\n${err}`.trim();
-      return { exit, output };
-    } finally {
-      clearTimeout(timer);
-      if (escalateTimer) clearTimeout(escalateTimer);
-    }
-  } catch (err) {
-    return { exit: 127, output: errMessage(err) };
-  }
+// The child surface the exec runner consumes (Bun's Subprocess, narrowed to
+// what we touch) — the seam the tests fake. The fake mirrors the real
+// contract: piped ReadableStreams, an `exited` promise, and kill().
+export type SpawnedProc = {
+  readonly stdout: ReadableStream<Uint8Array>;
+  readonly stderr: ReadableStream<Uint8Array>;
+  readonly exited: Promise<number>;
+  kill(signal?: KillSignal): void;
 };
+export type SpawnFn = (cmd: string, args: string[], opts: { cwd?: string }) => SpawnedProc;
+
+// The signals the escalation sends.
+export type KillSignal = "SIGTERM" | "SIGKILL";
+
+// How long a command may run before it is asked to stop, and how long the
+// SIGTERM grace lasts before the SIGKILL follows.
+export const EXEC_TERM_AFTER_MS = 120_000;
+export const EXEC_KILL_AFTER_MS = 5_000;
+
+// production spawn: array argv (no shell), piped output. The env is passed
+// FRESH: Bun.spawn resolves the binary against a STALE PATH otherwise (the
+// same trap spawn-safe.ts / exec-bun.ts avoid), so a git that appears on
+// the PATH after the process started would be ignored.
+const defaultSpawn: SpawnFn = (cmd, args, opts) =>
+  Bun.spawn([cmd, ...args], {
+    cwd: opts.cwd,
+    stdout: "pipe",
+    stderr: "pipe",
+    stdin: "ignore",
+    env: { ...process.env },
+  });
+
+// The escalation's phase — ONE explicit record.
+//
+// The old shape encoded the phase in the PRESENCE of the escalate timer,
+// and the timer callbacks had NO guard: a callback that landed after the
+// command had settled signalled a command that was already gone (a SIGTERM
+// to a dead process, and a SIGKILL timer that outlived the command — an
+// event-loop pin). The phase is the guard; the timer's presence is not.
+type ExecPhase =
+  | "running" // the command is alive; nothing has been sent yet
+  | "terminated" // SIGTERM sent; the SIGKILL escalation is armed
+  | "killed" // SIGKILL sent
+  | "settled"; // the command finished — it must never be signalled again
+
+// A pending timer, as a RECORD: the handle is opaque (the scheduler's
+// business), so the "is one pending?" fact cannot be read off its value.
+type TimerSlot = { handle: unknown };
+
+// The exec runner: spawn a command, collect its output, and make sure a
+// hung child cannot hold the install UI forever (SIGTERM, then SIGKILL).
+// Never throws — failures arrive as non-zero exit (callers surface output).
+export const makeExec = (deps: { spawn?: SpawnFn; sched?: Scheduler } = {}): ExecFn => {
+  const spawn = deps.spawn ?? defaultSpawn;
+  const sched: Scheduler = deps.sched ?? globalThis;
+  return async (cmd, args, opts) => {
+    try {
+      const proc = spawn(cmd, args, { cwd: opts?.cwd });
+      let phase: ExecPhase = "running";
+      let termTimer: TimerSlot | null = null;
+      let killTimer: TimerSlot | null = null;
+      const release = (slot: TimerSlot | null): void => {
+        if (slot === null) return;
+        sched.clearTimeout(slot.handle);
+      };
+      const termSlot: TimerSlot = { handle: null };
+      termTimer = termSlot;
+      termSlot.handle = sched.setTimeout(() => {
+        // a stale callback must not clear a NEWER pending record
+        if (termTimer === termSlot) termTimer = null;
+        // the command may have settled while this timer was in flight — the
+        // PHASE is the guard, not the timer's presence
+        if (phase !== "running") return;
+        phase = "terminated";
+        try {
+          proc.kill("SIGTERM");
+        } catch {}
+        // escalation: a SIGTERM-immune hung git must not hold `exited` (and the
+        // install UI) forever — SIGKILL follows after a grace period
+        const killSlot: TimerSlot = { handle: null };
+        killTimer = killSlot;
+        killSlot.handle = sched.setTimeout(() => {
+          if (killTimer === killSlot) killTimer = null;
+          if (phase !== "terminated") return;
+          phase = "killed";
+          try {
+            proc.kill("SIGKILL");
+          } catch {}
+        }, EXEC_KILL_AFTER_MS);
+      }, EXEC_TERM_AFTER_MS);
+      try {
+        const [out, err, exit] = await Promise.all([
+          new Response(proc.stdout).text(),
+          new Response(proc.stderr).text(),
+          proc.exited,
+        ]);
+        const output = `${out}\n${err}`.trim();
+        return { exit, output };
+      } finally {
+        // the command is done: it must never be signalled again, and no
+        // timer may be left holding the event loop
+        phase = "settled";
+        release(termTimer);
+        termTimer = null;
+        release(killTimer);
+        killTimer = null;
+      }
+    } catch (err) {
+      return { exit: 127, output: errMessage(err) };
+    }
+  };
+};
+
+const defaultExec: ExecFn = makeExec();
 
 export class AmbiguousPluginError extends Error {
   candidates: string[];
@@ -282,6 +357,24 @@ export const installPlugin = async (opts: {
   }
 };
 
+// Which lane an update takes — ONE explicit decision. The old shape read a
+// BOOLEAN (`isGit`) and let its false branch mean "provenance refresh",
+// while the refresh lane itself refuses a manual install: one flag stood
+// for three answers (pull / refresh / refuse).
+type UpdateLane =
+  | { kind: "checkout" } // a live .git → git pull --ff-only
+  | { kind: "provenance"; src: SourceRecord } // provenance → re-clone + copy over
+  | { kind: "manual" }; // neither → refuse
+
+const updateLaneFor = (dest: string): UpdateLane => {
+  try {
+    if (statSync(path.join(dest, ".git")).isDirectory()) return { kind: "checkout" };
+  } catch {}
+  const src = readSource(dest);
+  if (src) return { kind: "provenance", src };
+  return { kind: "manual" };
+};
+
 export const updatePlugin = async (opts: { dir: string; name: string; exec?: ExecFn }): Promise<string> => {
   const { dir, name, exec = defaultExec } = opts;
   if (!PLUGIN_NAME_RE.test(name)) throw new Error(`unsafe plugin name: ${JSON.stringify(name)}`);
@@ -291,20 +384,17 @@ export const updatePlugin = async (opts: { dir: string; name: string; exec?: Exe
   } catch {
     throw new Error(`"${name}" is not installed`);
   }
-  let isGit = false;
-  try {
-    isGit = statSync(path.join(dest, ".git")).isDirectory();
-  } catch {}
-  if (isGit) {
+  const lane = updateLaneFor(dest);
+  if (lane.kind === "checkout") {
     const res = await exec("git", ["-C", dest, "pull", "--ff-only"]);
     if (res.exit !== 0) throw new Error(`update failed: ${res.output.slice(0, 200) || `exit ${res.exit}`}`);
     return res.output.slice(0, 200) || "updated";
   }
+  if (lane.kind === "manual") throw new Error(`"${name}" is not a git checkout (installed manually?)`);
   // refresh path: folder/subdir installs carry provenance but no .git, so
   // re-clone and copy the same plugin over the live folder. state.json
   // (enabled flag, keybinds) and the provenance record survive the refresh.
-  const src = readSource(dest);
-  if (!src) throw new Error(`"${name}" is not a git checkout (installed manually?)`);
+  const src = lane.src;
   // re-validate provenance: install gated the URL through parseGitUrl, update
   // must too — a tampered .tfm-source.json could otherwise smuggle a
   // dash-prefixed git option or a local path into the clone argv

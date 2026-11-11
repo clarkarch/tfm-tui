@@ -14,13 +14,19 @@ import path from "node:path";
 import {
   AmbiguousPluginError,
   derivePluginName,
+  EXEC_KILL_AFTER_MS,
+  EXEC_TERM_AFTER_MS,
   findPluginMains,
   installPlugin,
+  makeExec,
   parseGitUrl,
   removePluginDir,
   updatePlugin,
+  type KillSignal,
+  type SpawnedProc,
 } from "./plugin-install";
 import type { ExecFn } from "../lib/exec-fn";
+import type { Scheduler } from "../lib/uiutil";
 
 // Installer contract: paste-a-git-URL -> validated -> cloned -> normalized
 // into plugins/<name>/<name>.ts. No network here: the git spawn is injected
@@ -306,6 +312,147 @@ describe("staging hygiene + provenance", () => {
       });
     } finally {
       rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// --- The exec runner's kill escalation -------------------------------------
+//
+// A virtual clock for the escalation timers. `uncancellable` models the
+// REAL race: a timer that was ALREADY DISPATCHED when the command settled
+// — the runtime cannot un-dispatch it, so its callback still runs. The old
+// shape encoded the escalation's phase in the PRESENCE of a timer handle
+// and had no guard on the callbacks, so such a callback signalled a
+// command that was already gone.
+const mkClock = (opts: { uncancellable?: boolean } = {}) => {
+  let now = 0;
+  let id = 0;
+  const timers = new Map<number, { at: number; cb: () => void }>();
+  const sched: Scheduler = {
+    setTimeout: (cb, ms) => {
+      timers.set(++id, { at: now + ms, cb });
+      return id;
+    },
+    clearTimeout: (h) => {
+      if (opts.uncancellable) return;
+      timers.delete(h as number);
+    },
+  };
+  const advance = (ms: number): void => {
+    const target = now + ms;
+    for (const [k, t] of [...timers]) {
+      if (t.at <= target) {
+        timers.delete(k);
+        now = t.at;
+        t.cb();
+      }
+    }
+    now = target;
+  };
+  return { sched, advance, pending: () => timers.size };
+};
+
+// Fake child mirroring the Bun Subprocess surface the exec runner consumes:
+// piped ReadableStreams, an `exited` promise, and kill() (which — like the
+// real Subprocess — defaults to SIGTERM when no signal is named).
+const fakeProc = (): { proc: SpawnedProc; kills: KillSignal[]; finish: (code: number) => void } => {
+  const enc = new TextEncoder();
+  const stream = (text: string): ReadableStream<Uint8Array> =>
+    new ReadableStream<Uint8Array>({
+      start: (c) => {
+        c.enqueue(enc.encode(text));
+        c.close();
+      },
+    });
+  let settleExit!: (code: number) => void;
+  const exited = new Promise<number>((res) => (settleExit = res));
+  const kills: KillSignal[] = [];
+  const proc: SpawnedProc = {
+    stdout: stream(""),
+    stderr: stream(""),
+    exited,
+    kill: (sig) => {
+      kills.push(sig ?? "SIGTERM");
+    },
+  };
+  return { proc, kills, finish: (code) => settleExit(code) };
+};
+
+describe("the exec runner's kill escalation", () => {
+  test("a hung command is escalated SIGTERM, then SIGKILL", async () => {
+    const { sched, advance } = mkClock();
+    const { proc, kills, finish } = fakeProc();
+    const exec = makeExec({ spawn: () => proc, sched });
+    const running = exec("git", ["clone"]);
+    advance(EXEC_TERM_AFTER_MS);
+    expect(kills).toEqual(["SIGTERM"]);
+    advance(EXEC_KILL_AFTER_MS);
+    expect(kills).toEqual(["SIGTERM", "SIGKILL"]);
+    finish(137);
+    expect((await running).exit).toBe(137);
+  });
+
+  test("a command that settles before the escalation timer fires is never signalled", async () => {
+    // The command finished, so the escalation timer must not signal it: a
+    // SIGTERM to a dead process is a lie, and the SIGKILL it arms outlives
+    // the command (an event-loop pin + a kill of an already-dead proc).
+    const { sched, advance } = mkClock({ uncancellable: true });
+    const { proc, kills, finish } = fakeProc();
+    const exec = makeExec({ spawn: () => proc, sched });
+    const running = exec("git", ["clone"]);
+    finish(0);
+    expect((await running).exit).toBe(0);
+    // the term timer was already dispatched when the command settled — its
+    // callback still runs, and it must do nothing
+    advance(EXEC_TERM_AFTER_MS + EXEC_KILL_AFTER_MS + 1_000);
+    expect(kills).toEqual([]);
+  });
+
+  test("a command that settles during the escalation is never killed again", async () => {
+    const { sched, advance } = mkClock({ uncancellable: true });
+    const { proc, kills, finish } = fakeProc();
+    const exec = makeExec({ spawn: () => proc, sched });
+    const running = exec("git", ["clone"]);
+    advance(EXEC_TERM_AFTER_MS);
+    expect(kills).toEqual(["SIGTERM"]); // the hung command is asked to stop
+    finish(0); // it exits on its own
+    await running;
+    // the SIGKILL escalation must not fire against a command that is gone
+    advance(EXEC_KILL_AFTER_MS + 1_000);
+    expect(kills).toEqual(["SIGTERM"]);
+  });
+
+  test("the escalation timers are released when the command settles", async () => {
+    // a cancelled/failed command must leave no timer holding the event loop
+    const { sched, advance, pending } = mkClock();
+    const { proc, finish } = fakeProc();
+    const exec = makeExec({ spawn: () => proc, sched });
+    const running = exec("git", ["clone"]);
+    finish(0);
+    await running;
+    expect(pending()).toBe(0);
+    advance(EXEC_TERM_AFTER_MS + EXEC_KILL_AFTER_MS + 1_000);
+    expect(pending()).toBe(0);
+  });
+
+  test("the exec runner spawns with the LIVE env", async () => {
+    // Bun.spawn resolves the binary against a STALE PATH unless the env is
+    // passed fresh (the same trap spawn-safe.ts / exec-bun.ts avoid): a git
+    // that appears on the PATH after the process started must still be the
+    // git the installer runs.
+    const root = mkdtempSync(path.join(os.tmpdir(), "tfm-plugin-exec-"));
+    const bin = path.join(root, "bin");
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(path.join(bin, "git"), "#!/bin/sh\necho STUB-GIT\n", { mode: 0o755 });
+    const oldPath = process.env.PATH;
+    process.env.PATH = `${bin}${path.delimiter}${oldPath ?? ""}`;
+    try {
+      const res = await makeExec()("git", ["--version"]);
+      expect(res.output).toContain("STUB-GIT");
+    } finally {
+      if (oldPath === undefined) delete process.env.PATH;
+      else process.env.PATH = oldPath;
+      rmSync(root, { recursive: true, force: true });
     }
   });
 });
