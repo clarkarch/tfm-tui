@@ -424,6 +424,13 @@ export const makeSlots = (ctx: SlotsCtx) => {
           id: slotId,
           width: Math.round(heightCells * 2),
           height: heightCells,
+          // The raster art FILLS the slot (it is drawn at the slot's height),
+          // so the fallback glyph must sit where that art sits: a top-aligned
+          // glyph in a 2..5-row slot put the icon on the row ABOVE the name
+          // (list view), so the name looked unaligned with its file. The slot
+          // is a COLUMN box, so justifyContent centers it vertically; the
+          // horizontal placement is untouched (the art hugs the slot's width).
+          justifyContent: "center",
           ...(onMouseDown ? { onMouseDown } : {}),
         },
         Text({ id: `${slotId}-g`, content: g, fg: states[initialState]?.fg ?? states[0]?.fg }),

@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { Box, type CliRenderer, type Renderable } from "@opentui/core";
+import { Box, Text, type CliRenderer, type Renderable } from "@opentui/core";
 import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
 import {
   dimHex,
@@ -855,6 +855,78 @@ describe("thumbnail mount", () => {
     expect([...(t.renderer.root.findDescendantById("test-x-force-hover") as any).backgroundColor.toInts()]).toEqual([
       0, 0, 0, 0,
     ]);
+  });
+});
+
+// The fallback glyph must sit WHERE THE RASTER ART SITS. The icon slot is
+// 1..5 rows tall and the raster fills it, so a top-aligned glyph put the
+// icon on the row ABOVE the name in a multi-row list row (zooming the list
+// row height grew the row, and the name looked unaligned with its file).
+describe("icon slot alignment", () => {
+  const mkSlots = (t: TestRendererSetup) =>
+    makeSlots({
+      renderer: () => t.renderer,
+      byId: (id) => t.renderer.root.findDescendantById(id),
+      colors: () => ({ bg: BG, sidebarFgMuted: FG, sidebarBg: BG, hoverBg: BG, white: "#fff" }) as unknown as Theme,
+      uiStyle: () => "solid",
+      iconsMode: () => "opaque",
+      iconCells: () => 3,
+      glyphFor: () => "F",
+      isTtyMode: () => false,
+      forceGlyph: () => false,
+    });
+
+  // the list row shape: a fixed-height row, the icon slot and the name.
+  // Each call gets its own renderer — the rows stack in the root, so a
+  // shared one would offset the line numbers.
+  const mountRow = async (h: number): Promise<string[]> => {
+    const t = await createTestRenderer({ width: 40, height: 10 });
+    try {
+      const slots = mkSlots(t);
+      const slot = slots.makeIconSlot("folder", [{ fg: FG, bg: BG }], h, PlainIdx.Rest);
+      const row = Box(
+        {
+          id: "list-row",
+          width: "100%",
+          height: h,
+          flexDirection: "row",
+          alignItems: "center",
+          columnGap: 1,
+          paddingLeft: 1,
+        },
+        slot.el,
+        Text({ id: "list-name", content: "file.txt", fg: FG }),
+      );
+      t.renderer.root.add(row);
+      await t.renderOnce();
+      return t.captureCharFrame().split("\n");
+    } finally {
+      await t.dispose();
+    }
+  };
+
+  test("the glyph shares the name's row in a multi-row list row", async () => {
+    // 3-row row: the name sits on the middle row, so the icon must too
+    const lines = await mountRow(3);
+    const glyphRow = lines.findIndex((l) => l.includes("F"));
+    const nameRow = lines.findIndex((l) => l.includes("file.txt"));
+    expect(glyphRow).toBe(nameRow);
+    expect(glyphRow).toBe(1); // the middle row
+  });
+
+  test("a 2-row list row keeps the glyph on the name's row", async () => {
+    const lines = await mountRow(2);
+    const glyphRow = lines.findIndex((l) => l.includes("F"));
+    const nameRow = lines.findIndex((l) => l.includes("file.txt"));
+    expect(glyphRow).toBe(nameRow);
+  });
+
+  test("a 1-row list row is unchanged (the glyph already shared the row)", async () => {
+    const lines = await mountRow(1);
+    const glyphRow = lines.findIndex((l) => l.includes("F"));
+    const nameRow = lines.findIndex((l) => l.includes("file.txt"));
+    expect(glyphRow).toBe(nameRow);
+    expect(glyphRow).toBe(0);
   });
 });
 
