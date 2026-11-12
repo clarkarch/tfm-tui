@@ -1,5 +1,4 @@
 import type { ThemePreset } from "../config/themes";
-import { UI_SCHEMA, type UiConfig } from "../config/config-schema";
 import type { SettingRow, SettingGroup } from "../config/config-schema";
 
 // --- Settings model: declarative rows drive both rendering and key/mouse
@@ -70,24 +69,9 @@ export const themeNearestIdx = (presets: ThemePreset[], theme: unknown): number 
   return best;
 };
 
-// zoom step for the zoomIn/zoomOut keybinds (ctrl+= / ctrl+-): grid view
-// scales tile W/H plus the icon cells so tiles and glyphs grow together;
-// list view scales the row height instead. Bounds/steps come from the schema
-// int rows (single source — same numbers the layout steppers use); saturated
-// axes hold their bound so zooming at min/max is a no-op patch.
-type ZoomProp = "tileWidth" | "tileHeight" | "iconCells" | "listRowHeight";
-
-const zoomStep = (ui: UiConfig, prop: ZoomProp, dir: number): number => {
-  const row = UI_SCHEMA.find((r) => r.prop === prop);
-  if (row?.kind !== "int") return ui[prop];
-  return Math.max(row.min, Math.min(row.max, ui[prop] + dir * row.step));
-};
-
-export const zoomUiPatch = (ui: UiConfig, dir: number): Partial<UiConfig> =>
-  ui.viewMode === "list"
-    ? { listRowHeight: zoomStep(ui, "listRowHeight", dir) }
-    : {
-        tileWidth: zoomStep(ui, "tileWidth", dir),
-        tileHeight: zoomStep(ui, "tileHeight", dir),
-        iconCells: zoomStep(ui, "iconCells", dir),
-      };
+// NOTE: the zoomIn/zoomOut keybinds (ctrl+= / ctrl+-) do NOT live here — they
+// are in ./zoom: the grid zoom scales the tile W/H plus the icon cells
+// together as ONE proportional ladder (the old per-axis step let each axis
+// saturate on its own, so the tile ran on to "too big" and a zoom-in/zoom-out
+// round trip lost a cell it never gained); the list view scales the row
+// height instead.

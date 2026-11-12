@@ -11,7 +11,7 @@ import { decodePasteBytes, type KeyEvent, type PasteEvent } from "@opentui/core"
 import { makeKeyRouter } from "../input/keymap";
 import { makePick } from "../ui/ui-pick";
 import { makePrompt } from "../ui/ui-prompt";
-import { zoomUiPatch } from "../ui/settings";
+import { makeZoom } from "../ui/zoom";
 import { cycleSortMode, naturalAscFor } from "../lib/sort";
 import { destroyChildren, errMessage } from "../lib/uiutil";
 import { flattenPluginCommands, getPluginCommandBinds, isPluginEnabled } from "../plugins/plugin-api";
@@ -43,6 +43,21 @@ export const wireKeymap = (deps: {
   const { core, nav, chrome, gridFoundation, grid, fileops, settings, plugins, getRetheme, getUpdates } = deps;
   const { state, floats } = core;
   const { byId } = core.lookup;
+
+  // --- Zoom (ctrl+= / ctrl+-): the owner walks the grid ladder (one
+  // proportional scale over the tile W/H + icon cells, so no axis runs past
+  // its bound alone and a zoom-in/zoom-out round trip returns the exact
+  // starting geometry). It reads the LIVE config — the patch is applied to
+  // that config below, so the next step walks the level it just landed on. ---
+  const zoom = makeZoom({
+    viewMode: () => core.config.ui.viewMode,
+    grid: () => ({
+      tileWidth: core.config.ui.tileWidth,
+      tileHeight: core.config.ui.tileHeight,
+      iconCells: core.config.ui.iconCells,
+    }),
+    listRowHeight: () => core.config.ui.listRowHeight,
+  });
 
   // --- Generic pick overlay (api.ui.pick): created before the router so the
   // interception branch closes over it directly; its item source reads the
@@ -335,11 +350,11 @@ export const wireKeymap = (deps: {
       void grid.renderGrid();
     },
     zoomTiles: (dir) => {
-      const ui = core.config.ui;
-      const patch = zoomUiPatch(ui, dir);
-      const keys = Object.keys(patch) as (keyof typeof patch)[];
-      if (!keys.some((k) => patch[k] !== ui[k])) return; // saturated at min/max
-      getRetheme().applyConfig({ ...core.config, ui: { ...ui, ...patch } });
+      // the zoom owner walks the grid ladder (one proportional scale over the
+      // tile W/H + icon cells) — an empty patch means the zoom is at its limit
+      const patch = zoom.patch(dir);
+      if (Object.keys(patch).length === 0) return;
+      getRetheme().applyConfig({ ...core.config, ui: { ...core.config.ui, ...patch } });
       getRetheme().scheduleSaveConfig();
     },
     switchPane: () => {
