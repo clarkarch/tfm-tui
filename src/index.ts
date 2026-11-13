@@ -299,7 +299,7 @@ const updates = wireUpdates({
   enabled: () => core.config.ui.checkUpdates === true,
   notify: (m, t, l) => chrome.notify(m, t, l),
   sticky: (msg) => chrome.notifyStickyText(msg),
-  confirm: (message, yesLabel, onYes) => fileops.yesNo.confirm(message, yesLabel, onYes),
+  confirm: (request) => fileops.yesNo.confirm(request),
   repaint: () => settings.escMenu.renderMenuContent(),
   log: (msg) => appendLog(`update check: ${msg}`),
 });

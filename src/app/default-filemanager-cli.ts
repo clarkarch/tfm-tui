@@ -64,7 +64,8 @@ Usage: tfm default-filemanager [status]
   status            show the live handler, the recorded answer, and whether
                     the desktop entry is installed (default, no subcommand)
   set               make tfm the default (remembers the replaced handler;
-                    records "yes" only on success, so a failure re-asks)
+                    records "yes" on success and "failed" on failure — either
+                    way the boot prompt stops asking)
   unset             restore the handler tfm replaced (refuses when none was
                     recorded — the default is never cleared blindly)
   forget            delete the recorded answer so the prompt asks again
@@ -150,6 +151,11 @@ export const runDefaultFileManagerCli = async (
         if (answer === "yes" && current && current !== TFM_DESKTOP_ID) {
           out(`note: recorded "yes" is not in effect — run 'tfm default-filemanager set' or pick Yes again`);
         }
+        // the failed-attempt callout: the answer stands (the boot prompt
+        // does not ask again), but the set never landed
+        if (answer === "failed") {
+          out("note: the last attempt to make tfm the default failed — run 'tfm default-filemanager set' to retry");
+        }
         // the nautilus-alongside state: mime says tfm but nobody holds the
         // D-Bus name, so the next ShowItems cold-activates nautilus
         let svcInstalled = false;
@@ -178,9 +184,15 @@ export const runDefaultFileManagerCli = async (
         return 0;
       }
       case "set": {
-        // record yes ONLY on success: a failed yes must re-ask (prompt, next boot)
         const res = await (deps.setDefault?.("set") ?? setDefaultFileManager("set"));
         if (!res.ok) {
+          // the user explicitly asked for tfm to be the default; the
+          // operation failed. Record the FAILURE so the boot prompt stops
+          // asking the same question (and re-toasting the same failure) on
+          // every launch — the retry is an explicit command again.
+          (deps.recordChoice ?? recordFileManagerChoice)("failed", {
+            ...(deps.markerFile ? { markerFile: deps.markerFile } : {}),
+          });
           err(`tfm: ${res.message}`);
           return 1;
         }

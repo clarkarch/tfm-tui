@@ -10,7 +10,7 @@ import path from "node:path";
 import pkg from "../../package.json";
 import { dlog } from "../lib/log";
 import type { Command } from "../lib/command";
-import type { ConfirmOutcome } from "../lib/confirm-outcome";
+import type { ConfirmOutcome, ConfirmRequest } from "../lib/confirm-outcome";
 import { sharedPluginEvents } from "../lib/plugin-events";
 import { sharedPluginHooks } from "../lib/plugin-hooks";
 import { installPluginRuntimeSupport } from "../ui/ui-plugin-runtime";
@@ -28,6 +28,19 @@ import { isLazyBoot } from "../lib/boot-mode";
 
 export type PluginsWiring = Awaited<ReturnType<typeof wirePlugins>>;
 
+// The title-less confirm layout has one visible explanation. A plugin's
+// title carries the main point and its body carries the details, so keep both
+// in the visible text instead of allowing the title to disappear behind a
+// details-only body.
+const pluginConfirmBody = (title: string, body?: string): string | undefined => {
+  const detail = body?.trim();
+  if (!detail) return undefined;
+  const subject = title.trim();
+  if (!subject) return detail;
+  const separator = /[.!?…]$/.test(subject) ? " " : ". ";
+  return `${subject}${separator}${detail}`;
+};
+
 export const wirePlugins = async (deps: {
   core: CoreWiring;
   nav: NavWiring;
@@ -42,7 +55,7 @@ export const wirePlugins = async (deps: {
     open(opts: { title: string; items?: Array<{ label: string; hint?: string; run: () => void }> }): void;
   };
   getConfirm?: () => {
-    confirm(message: string, yesLabel: string, onYes: () => void, danger?: boolean): ConfirmOutcome;
+    confirm(request: ConfirmRequest): ConfirmOutcome;
     isOpen(): boolean;
   };
   // single-line prompt (keymap wires LAST — lazy getter like getPick)
@@ -143,12 +156,14 @@ export const wirePlugins = async (deps: {
             resolve(v);
           };
           try {
-            const outcome = c.confirm(
-              opts.body ? `${opts.title}: ${opts.body}` : opts.title,
-              "Yes",
-              () => done(true),
-              opts.danger ?? false,
-            );
+            const visibleBody = pluginConfirmBody(opts.title, opts.body);
+            const outcome = c.confirm({
+              title: opts.title,
+              ...(visibleBody !== undefined ? { body: visibleBody } : {}),
+              danger: opts.danger ?? false,
+              onYes: () => done(true),
+              onNo: () => done(false),
+            });
             if (outcome.kind !== "opened") {
               // "busy" = another question is up. The plugin API answers with
               // a boolean, so the plugin sees "no" — but the dialog already
@@ -156,12 +171,17 @@ export const wirePlugins = async (deps: {
               done(false);
               return;
             }
+            // The answer callback may settle synchronously (a headless fake,
+            // or a click handled during confirm()). Do not arm the dismissal
+            // poll afterwards: `done` already returned, so those timers would
+            // never be cleared and would pin the event loop.
+            if (settled) return;
           } catch {
             done(false);
             return;
           }
-          // No/Esc/close resolves false — poll the open flag (the dialog has
-          // no onNo hook; polling is the same settle pattern tests use).
+          // No settles through onNo. Esc / click-away is a dismissal, so the
+          // plugin still resolves false — poll the open flag for that path.
           timer = setInterval(() => {
             try {
               if (!c.isOpen()) done(false);

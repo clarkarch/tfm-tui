@@ -6,13 +6,12 @@
 
 import { errMessage } from "../lib/uiutil";
 import type { NotifyLevel } from "../lib/notify-level";
-import type { ConfirmOutcome } from "../lib/confirm-outcome";
+import type { ConfirmOutcome, ConfirmRequest } from "../lib/confirm-outcome";
 import {
   cacheFresh,
   readUpdateCache,
   statusFor,
-  UPDATE_PROMPT_MESSAGE,
-  updatePromptYesLabel,
+  updatePromptRequest,
   updateRowValue,
   updateRowActionable,
   updateToast,
@@ -41,7 +40,7 @@ export type UpdatesCtx = {
   // the request outcome: "busy" (another question is up) is NOT a decline.
   // The dialog surfaces that refusal itself, so the update flow does not
   // have to — but the type keeps the two apart.
-  confirm(message: string, yesLabel: string, onYes: () => void): ConfirmOutcome;
+  confirm(request: ConfirmRequest): ConfirmOutcome;
   // repaint the About view if it is open (row value changed)
   repaint(): void;
   now?(): number;
@@ -212,7 +211,7 @@ export const wireUpdates = (ctx: UpdatesCtx) => {
     try {
       // a refused request (another question is up) is NOT a decline — the
       // dialog surfaced the refusal itself, so the update flow stays quiet
-      ctx.confirm(UPDATE_PROMPT_MESSAGE, updatePromptYesLabel(s.latest), yes);
+      ctx.confirm(updatePromptRequest(s.latest, yes));
     } catch (err) {
       ctx.log?.(`update prompt failed: ${errMessage(err)}`);
       ctx.notify("Update available · run 'tfm update'", "update", "info");

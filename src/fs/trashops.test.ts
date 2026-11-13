@@ -488,15 +488,20 @@ describe("terminal notification for a finished delete", () => {
 });
 
 describe("makeTrashConfirms", () => {
-  type Confirmed = { message: string; yesLabel: string; danger?: boolean };
+  type Confirmed = { title: string; body?: string; yesLabel?: string; danger?: boolean };
   const mkEnv = () => {
     const asked: Confirmed[] = [];
     const fired: string[] = [];
     let onYes: (() => void) | null = null;
     const confirms = makeTrashConfirms({
-      confirm: (message, yesLabel, cb, danger) => {
-        asked.push({ message, yesLabel, danger });
-        onYes = cb;
+      confirm: (request) => {
+        asked.push({
+          title: request.title,
+          body: request.body,
+          yesLabel: request.yesLabel,
+          danger: request.danger,
+        });
+        onYes = request.onYes;
         return { kind: "opened" };
       },
       emptyTrash: () => {
@@ -518,8 +523,9 @@ describe("makeTrashConfirms", () => {
       const { asked, confirms, runYes, fired } = mkEnv();
       confirms.confirmEmptyTrash();
       expect(asked[0]).toEqual({
-        message: "Empty Trash (2 items)? This cannot be undone.",
-        yesLabel: "Empty Trash",
+        title: "Empty trash",
+        body: "Empty the trash? 2 items removed. This cannot be undone.",
+        yesLabel: "empty trash",
         danger: true,
       });
       runYes();
@@ -534,7 +540,8 @@ describe("makeTrashConfirms", () => {
     try {
       const { asked, confirms } = mkEnv();
       confirms.confirmEmptyTrash();
-      expect(asked[0]!.message).toBe("Empty Trash? This cannot be undone.");
+      expect(asked[0]!.title).toBe("Empty trash");
+      expect(asked[0]!.body).toBe("Empty the trash? Items removed. This cannot be undone.");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -543,14 +550,15 @@ describe("makeTrashConfirms", () => {
   test("delete-forever prompt pluralizes and carries the paths into the action", () => {
     const { asked, confirms, runYes, fired } = mkEnv();
     confirms.confirmDeleteForever(["/t/a"]);
-    expect(asked[0]!.message).toBe("Permanently delete 1 item? This cannot be undone.");
-    expect(asked[0]!.yesLabel).toBe("Delete permanently");
+    expect(asked[0]!.title).toBe("Delete permanently");
+    expect(asked[0]!.body).toBe("Delete 1 item permanently? This cannot be undone.");
+    expect(asked[0]!.yesLabel).toBe("delete permanently");
     expect(asked[0]!.danger).toBe(true);
     runYes();
     expect(fired).toEqual(["delete:/t/a"]);
 
     confirms.confirmDeleteForever(["/t/a", "/t/b"]);
-    expect(asked[1]!.message).toBe("Permanently delete 2 items? This cannot be undone.");
+    expect(asked[1]!.body).toBe("Delete 2 items permanently? This cannot be undone.");
     runYes();
     expect(fired).toEqual(["delete:/t/a", "delete:/t/a,/t/b"]);
   });

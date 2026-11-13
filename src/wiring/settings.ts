@@ -16,7 +16,7 @@ import { makeEscMenu } from "../ui/ui-settings";
 import { makeRetheme } from "../ui/ui-retheme";
 import { scrollbarTrackColors } from "../ui/ui-boot-layout";
 import { sharedPluginEvents } from "../lib/plugin-events";
-import type { ConfirmOutcome } from "../lib/confirm-outcome";
+import type { ConfirmOutcome, ConfirmRequest } from "../lib/confirm-outcome";
 import { syncSortState } from "../lib/sort";
 import { clearFailedThumbs } from "../ui/icons";
 import { cancelBands } from "../input/grid-input";
@@ -24,11 +24,7 @@ import { destroyChildren, errMessage } from "../lib/uiutil";
 import { dlog } from "../lib/log";
 import { makeUrlOpener } from "../fs/open-url";
 import { whichLive } from "../fs/which";
-import {
-  makeDefaultFileManagerOrchestration,
-  makeDefaultFileManagerPrompt,
-  type FileManagerConfirmItem,
-} from "../fs/default-filemanager";
+import { makeDefaultFileManagerOrchestration, makeDefaultFileManagerPrompt } from "../fs/default-filemanager";
 import { installFileManagerService, resolveServiceExec } from "../app/filemanager-service";
 import { paneNormalizeAction, pointPaneAt } from "../app/panes";
 import { installPlugin, removePluginDir, updatePlugin } from "../plugins/plugin-install";
@@ -55,9 +51,11 @@ export const wireSettings = (deps: {
     open(opts: { title: string; placeholder?: string; okLabel?: string; initial?: string }): Promise<string | null>;
   };
   // yes/no confirm dialog wires in fileops (before settings) — the
-  // default-file-manager prompt opens through it; boot calls it post-wiring
+  // default-file-manager prompt opens through it; boot calls it post-wiring.
+  // onNo carries the DECLINE back (the default-file-manager prompt records
+  // "no" from it, so the answered question never comes back).
   getConfirm: () => {
-    confirm(message: string, yesLabel: string, onYes: () => void, danger?: boolean): ConfirmOutcome;
+    confirm(request: ConfirmRequest): ConfirmOutcome;
     isOpen(): boolean;
   };
   // update checking wires AFTER settings (it needs this module's repaint), so
@@ -214,9 +212,12 @@ export const wireSettings = (deps: {
         return "silent";
       }
     },
-    openConfirm: (opts: FileManagerConfirmItem) => {
+    openConfirm: (opts: ConfirmRequest) => {
       const c = getConfirm();
-      const outcome = c.confirm(opts.message, opts.yesLabel, opts.onYes);
+      // onNo carries the DECLINE back to the leaf, which records "no" — the
+      // user answered, so the question must not come back on the next boot.
+      // A dismissal (esc/click-away) fires neither callback.
+      const outcome = c.confirm(opts);
       if (outcome.kind === "busy") {
         // another question is up: the dialog surfaced that refusal itself,
         // so this path stays quiet (the sticky fallback would stack a

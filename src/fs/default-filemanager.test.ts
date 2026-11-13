@@ -98,6 +98,22 @@ describe("queryFileManagerChoice", () => {
     ).toBe("silent");
   });
 
+  test("a recorded 'failed' answer is final (the user chose — don't ask again)", () => {
+    // the user answered Yes and the set failed (the .desktop entry isn't
+    // installed): the choice was MADE, so re-asking on the next boot is
+    // nagging — and it dragged the same failure toast along with it, on
+    // every single launch.
+    const dir = sandbox();
+    const marker = path.join(dir, "choice");
+    writeFileSync(marker, "failed\n");
+    expect(
+      queryFileManagerChoice({
+        currentDefault: () => "org.gnome.Nautilus.desktop",
+        markerFile: () => marker,
+      }),
+    ).toBe("silent");
+  });
+
   test("marker later re-asks even when something else is the default", () => {
     const dir = sandbox();
     const marker = path.join(dir, "choice");
@@ -289,7 +305,7 @@ describe("defaultFileManagerMarker", () => {
 });
 
 describe("readFileManagerAnswer", () => {
-  test("returns the raw yes/no/later answer, null when unanswered or garbage", () => {
+  test("returns the raw yes/no/later/failed answer, null when unanswered or garbage", () => {
     const dir = sandbox();
     const marker = path.join(dir, "choice");
     expect(readFileManagerAnswer({ markerFile: () => marker })).toBeNull();
@@ -299,6 +315,8 @@ describe("readFileManagerAnswer", () => {
     expect(readFileManagerAnswer({ markerFile: () => marker })).toBe("no");
     writeFileSync(marker, "later\n");
     expect(readFileManagerAnswer({ markerFile: () => marker })).toBe("later");
+    writeFileSync(marker, "failed\n");
+    expect(readFileManagerAnswer({ markerFile: () => marker })).toBe("failed");
     writeFileSync(marker, "maybe\n");
     expect(readFileManagerAnswer({ markerFile: () => marker })).toBeNull();
   });
@@ -405,7 +423,7 @@ describe("makeDefaultFileManagerOrchestration", () => {
   test("openPrompt asks via confirm dialog (Yes/No buttons, not a palette)", async () => {
     const dir = sandbox();
     const marker = path.join(dir, "choice");
-    const confirmed: Array<{ message: string; yesLabel: string }> = [];
+    const confirmed: Array<{ title: string; body?: string; yesLabel?: string }> = [];
     const notified: string[] = [];
     const sets: string[] = [];
     const orch = makeDefaultFileManagerOrchestration({
@@ -414,21 +432,25 @@ describe("makeDefaultFileManagerOrchestration", () => {
     });
     const opener = makeDefaultFileManagerPrompt({
       choice: () => orch.choice(),
-      openConfirm: (opts: { message: string; yesLabel: string; onYes: () => void }) => {
-        confirmed.push({ message: opts.message, yesLabel: opts.yesLabel });
+      openConfirm: (opts) => {
+        confirmed.push({ title: opts.title, body: opts.body, yesLabel: opts.yesLabel });
       },
       setDefault: async (op: "set" | "unset") => {
         sets.push(op);
         return { ok: true, message: "done" };
       },
-      record: (a: "yes" | "no" | "later") => recordFileManagerChoice(a, { markerFile: () => marker }),
+      record: (a) => recordFileManagerChoice(a, { markerFile: () => marker }),
       notify: (msg: string) => notified.push(msg),
       log: () => {},
     });
     // verdict ask → one confirm dialog opens (the boot prompt drives the flow)
     expect(await opener()).toBe(true);
     expect(confirmed).toHaveLength(1);
-    expect(confirmed[0]!.yesLabel).toBe("Set as default");
+    expect(confirmed[0]).toEqual({
+      title: "Set tfm as default",
+      body: "Make tfm the default file manager? Folder opens will use tfm.",
+      yesLabel: "set as default",
+    });
   });
 
   test("openPrompt stays shut on silent verdict (already answered)", async () => {
@@ -494,11 +516,11 @@ describe("makeDefaultFileManagerOrchestration", () => {
     let onYes: (() => void) | null = null;
     const opener = makeDefaultFileManagerPrompt({
       choice: () => "ask",
-      openConfirm: (opts: { message: string; yesLabel: string; onYes: () => void }) => {
+      openConfirm: (opts) => {
         onYes = opts.onYes;
       },
       setDefault: async () => ({ ok: true, message: "mime set" }),
-      record: (a: "yes" | "no" | "later") => {
+      record: (a) => {
         records.push(a);
         recordFileManagerChoice(a, { markerFile: () => marker });
       },
@@ -522,7 +544,7 @@ describe("makeDefaultFileManagerOrchestration", () => {
     let onYes: (() => void) | null = null;
     const opener = makeDefaultFileManagerPrompt({
       choice: () => "ask",
-      openConfirm: (opts: { message: string; yesLabel: string; onYes: () => void }) => {
+      openConfirm: (opts) => {
         onYes = opts.onYes;
       },
       setDefault: async () => ({ ok: true, message: "mime set" }),
@@ -537,14 +559,117 @@ describe("makeDefaultFileManagerOrchestration", () => {
     expect(notified[0]!.msg).toContain("activator failed");
   });
 
-  test("dismissing the confirm (No/esc) records nothing (asks again next boot)", async () => {
+  test("a FAILED set records the answer (the boot prompt stops asking)", async () => {
+    // the reported annoyance: the user clicked Yes, the set failed ("tfm.desktop
+    // isn't installed"), and NOTHING was recorded — so the next boot asked
+    // again and toasted the SAME failure again. The choice was made; the
+    // operation failed. Those are two different facts, and only the second
+    // one is retryable (from the settings row / the CLI).
+    const dir = sandbox();
+    const marker = path.join(dir, "choice");
+    const records: string[] = [];
+    const notified: string[] = [];
+    let onYes: (() => void) | null = null;
+    const opener = makeDefaultFileManagerPrompt({
+      choice: () => "ask",
+      openConfirm: (opts) => {
+        onYes = opts.onYes;
+      },
+      setDefault: async () => ({ ok: false, message: "tfm.desktop isn't installed · reinstall tfm" }),
+      record: (a) => {
+        records.push(a);
+        recordFileManagerChoice(a, { markerFile: () => marker });
+      },
+      notify: (msg: string) => notified.push(msg),
+      log: () => {},
+    });
+    expect(await opener()).toBe(true);
+    onYes!(); // Yes button
+    await settleUntil(() => notified.length === 1);
+    expect(records).toEqual(["failed"]);
+    // the next boot is silent — no prompt, no repeated failure toast
+    expect(
+      queryFileManagerChoice({ currentDefault: () => "org.gnome.Nautilus.desktop", markerFile: () => marker }),
+    ).toBe("silent");
+  });
+
+  test("a throwing failure notification still records the failed answer", async () => {
+    // The choice and the operation outcome are two facts. A broken toast
+    // must not erase the answer the user already gave, or the next boot
+    // asks the same question again.
+    const records: string[] = [];
+    let onYes: (() => void) | null = null;
+    const opener = makeDefaultFileManagerPrompt({
+      choice: () => "ask",
+      openConfirm: (opts) => {
+        onYes = opts.onYes;
+      },
+      setDefault: async () => ({ ok: false, message: "set failed" }),
+      record: (answer) => records.push(answer),
+      notify: () => {
+        throw new Error("toast failed");
+      },
+      log: () => {},
+    });
+    expect(await opener()).toBe(true);
+    onYes!();
+    await settleUntil(() => records.length === 1);
+    expect(records).toEqual(["failed"]);
+  });
+
+  test("a THROWN set records the answer too (a crash is not a reason to nag)", async () => {
+    const records: string[] = [];
+    let onYes: (() => void) | null = null;
+    const opener = makeDefaultFileManagerPrompt({
+      choice: () => "ask",
+      openConfirm: (opts) => {
+        onYes = opts.onYes;
+      },
+      setDefault: async () => {
+        throw new Error("boom");
+      },
+      record: (a) => records.push(a),
+      notify: () => {},
+      log: () => {},
+    });
+    expect(await opener()).toBe(true);
+    onYes!();
+    await settleUntil(() => records.length === 1);
+    expect(records).toEqual(["failed"]);
+  });
+
+  test("the No answer records 'no' (the user declined — never ask again)", async () => {
+    // The confirm widget only ever fired onYes, so the prompt could not learn
+    // that the user said NO: the marker stayed unwritten and the question came
+    // back on every single boot.
+    const records: string[] = [];
+    let onNo: unknown = null;
+    const opener = makeDefaultFileManagerPrompt({
+      choice: () => "ask",
+      openConfirm: (opts) => {
+        onNo = opts.onNo;
+      },
+      setDefault: async () => ({ ok: true, message: "done" }),
+      record: (a) => records.push(a),
+      notify: () => {},
+      log: () => {},
+    });
+    expect(await opener()).toBe(true);
+    // the confirm must hand the prompt a way to learn about the No
+    expect(typeof onNo).toBe("function");
+    (onNo as () => void)();
+    expect(records).toEqual(["no"]);
+  });
+
+  test("dismissing the confirm (esc/click-away) records nothing (a dismissal is not an answer)", async () => {
     const records: string[] = [];
     const opener = makeDefaultFileManagerPrompt({
       choice: () => "ask",
-      // the confirm widget calls onYes only on Yes; a dismiss never fires it
+      // a dismissal fires NEITHER onYes nor onNo — the question was not
+      // answered, so the next boot may ask it again
       openConfirm: () => {},
       setDefault: async () => ({ ok: true, message: "done" }),
-      record: (a: "yes" | "no" | "later") => {
+      record: (a) => {
         records.push(a);
       },
       notify: () => {},

@@ -37,6 +37,7 @@ describe("api action surface (wired passthrough)", () => {
     process.env.XDG_CONFIG_HOME = path.join(root, "config");
     process.env.XDG_CACHE_HOME = path.join(root, "cache");
     const calls: string[] = [];
+    const confirmations: Array<{ title: string; body?: string; danger?: boolean }> = [];
     const fakePrompt = {
       open: (o: { title: string; initial?: string }) => {
         calls.push(`prompt:${o.title}:${o.initial ?? ""}`);
@@ -66,10 +67,25 @@ describe("api action surface (wired passthrough)", () => {
         getKeymap: () => ({ commands: () => [] }),
         getPick: () => ({ open: () => {} }),
         getPrompt: () => fakePrompt,
+        getConfirm: () => ({
+          confirm: (request) => {
+            confirmations.push({ title: request.title, body: request.body, danger: request.danger });
+            request.onNo?.();
+            return { kind: "opened" };
+          },
+          isOpen: () => false,
+        }),
       });
       const api = wiring.api;
       expect(await api.ui.prompt({ title: "hi", value: "pre" })).toBe("typed");
       expect(calls).toContain("prompt:hi:pre");
+      // The plugin's title carries the main point and its body carries the
+      // details. The title-less confirm layout combines both into the visible
+      // explanation; the dialog supplies the default affirmative verb ("yes").
+      expect(await api.ui.confirm({ title: "Plugin question", body: "Plugin details", danger: true })).toBe(false);
+      expect(confirmations).toEqual([
+        { title: "Plugin question", body: "Plugin question. Plugin details", danger: true },
+      ]);
       api.navigate("/y");
       expect(calls).toContain("nav:/y");
       api.open("/x/a");

@@ -9,6 +9,7 @@ import os from "node:os";
 import path from "node:path";
 import { atomicWriteFile } from "../lib/atomic-write";
 import type { NotifyLevel } from "../lib/notify-level";
+import type { ConfirmRequest } from "../lib/confirm-outcome";
 
 export const UPDATE_REPO = "clarkarch/tfm-tui";
 
@@ -158,18 +159,14 @@ export const updateToast = (s: UpdateStatus): { title: string; message: string; 
   }
 };
 
-// the confirm: one line that always fits wrapYesNoMessage's 45-cell budget,
-// with the version riding the button instead (the message stays break-proof).
-export const UPDATE_PROMPT_MESSAGE = "A new version of tfm is available!";
-
-// the widest label the yes button already carries is "Delete permanently"
-// (18 cells) inside `[ <label> ]`; past that it clips mid-word, so an exotic
-// version (a prerelease) falls back to the plain verb.
-export const UPDATE_PROMPT_LABEL_BUDGET = 18;
-export const updatePromptYesLabel = (latest: string, budget = UPDATE_PROMPT_LABEL_BUDGET): string => {
-  const label = `Update to ${latest}`;
-  return label.length <= budget ? label : "Update";
-};
+// The confirm's copy: the visible body states the action and version, while
+// the affirmative option carries the verb.
+export const updatePromptRequest = (latest: string, onYes: () => void): ConfirmRequest => ({
+  title: "Update tfm",
+  body: `Update tfm to ${latest}?`,
+  yesLabel: "update",
+  onYes,
+});
 
 // --- check cache: $XDG_CACHE_HOME/tfm/update-check.json. Ephemeral (a TTL
 // window + the last version we told the user about), so it is cache, not

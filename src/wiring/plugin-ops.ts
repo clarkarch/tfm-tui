@@ -102,9 +102,8 @@ export const makePluginOps = (deps: PluginOpsDeps): PluginOps => {
           }
         } catch {}
         deps.log(`plugin install requested: ${raw} -> ${name}`);
-        // title-only: the Yes/No dialog slices its message to one 34-char
-        // row, so any body is cut mid-sentence (the trust warning already
-        // leads the URL prompt's title, and the outcome toast reports back)
+        // title-only: the trust warning already leads the URL prompt's title,
+        // and the outcome toast reports back
         const ok = await deps.confirm({
           title: `Install "${name}"?`,
           danger: true,
@@ -167,7 +166,7 @@ export const makePluginOps = (deps: PluginOpsDeps): PluginOps => {
     }
     void (async () => {
       try {
-        // title-only (see above — bodies are sliced mid-sentence by the dialog)
+        // title-only (see above — the confirm itself carries the context)
         const ok = await deps.confirm({
           title: `Remove "${name}"?`,
           danger: true,

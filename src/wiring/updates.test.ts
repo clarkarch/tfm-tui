@@ -13,7 +13,7 @@ type Harness = {
   ctx: UpdatesCtx;
   notes: Array<{ msg: string; title?: string; level?: string }>;
   stickies: Array<{ msg: string; closed: boolean }>;
-  confirmations: Array<{ message: string; yesLabel: string }>;
+  confirmations: Array<{ title: string; body?: string; yesLabel?: string }>;
   installs: RunInstallerDeps[];
   fetches: () => number;
   status: () => UpdateStatus | null;
@@ -40,9 +40,9 @@ const harness = (over: Partial<UpdatesCtx> = {}, result?: InstallerResult): Harn
         },
       };
     },
-    confirm: (message, yesLabel, onYes) => {
-      confirmations.push({ message, yesLabel });
-      onYes();
+    confirm: (request) => {
+      confirmations.push({ title: request.title, body: request.body, yesLabel: request.yesLabel });
+      request.onYes();
       return { kind: "opened" };
     },
     repaint: () => {},
@@ -141,7 +141,7 @@ describe("wireUpdates", () => {
     const h = harness();
     const u = wireUpdates(h.ctx);
     await u.activate();
-    expect(h.confirmations).toEqual([{ message: "A new version of tfm is available!", yesLabel: "Update to 1.1.0" }]);
+    expect(h.confirmations).toEqual([{ title: "Update tfm", body: "Update tfm to 1.1.0?", yesLabel: "update" }]);
   });
 
   test("an already-known update asks immediately, with no second check", async () => {

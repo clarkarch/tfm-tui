@@ -10,3 +10,18 @@
 // contract without importing up into ui/ — same layering rule as
 // ./notify-level.
 export type ConfirmOutcome = { kind: "opened" } | { kind: "busy" };
+
+// The request is ONE object so a caller cannot transpose the title, body and
+// affirmative verb by accident. `title` is the subject of the question and
+// the fallback visible explanation; `body` is the visible explanation and
+// should state the prompt's main point, while `yesLabel` is the action the
+// affirmative option performs. A dismissal (esc / click-away) fires neither
+// callback; `onNo` means the user actually answered No.
+export type ConfirmRequest = {
+  title: string;
+  body?: string;
+  yesLabel?: string;
+  onYes: () => void;
+  danger?: boolean;
+  onNo?: () => void;
+};

@@ -17,7 +17,7 @@ import {
   UPDATE_LATEST_URL,
   UPDATE_REPO,
   updateCachePath,
-  updatePromptYesLabel,
+  updatePromptRequest,
   updateRowActionable,
   updateRowValue,
   updateToast,
@@ -150,12 +150,13 @@ describe("status (pure)", () => {
     }
   });
 
-  test("the yes button says the version while it fits the button", () => {
-    // the widest existing label is "Delete permanently" (18); the button is
-    // `[ <label> ]` in a ~22-cell box, so past 18 it clips mid-word
-    expect(updatePromptYesLabel("1.1.0")).toBe("Update to 1.1.0");
-    expect(updatePromptYesLabel("1.10.0")).toBe("Update to 1.10.0");
-    expect(updatePromptYesLabel("1.1.0-rc.1")).toBe("Update");
+  test("the confirm request carries the version, title, and affirmative verb", () => {
+    const request = updatePromptRequest("1.1.0", () => {});
+    expect(request.title).toBe("Update tfm");
+    expect(request.body).toBe("Update tfm to 1.1.0?");
+    expect(request.yesLabel).toBe("update");
+    expect(updatePromptRequest("1.10.0", () => {}).body).toBe("Update tfm to 1.10.0?");
+    expect(updatePromptRequest("1.1.0-rc.1", () => {}).body).toBe("Update tfm to 1.1.0-rc.1?");
   });
 });
 

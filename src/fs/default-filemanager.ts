@@ -4,6 +4,7 @@ import path from "node:path";
 import { errMessage } from "../lib/uiutil";
 import type { NotifyLevel } from "../lib/notify-level";
 import type { ExecFn } from "../lib/exec-fn";
+import type { ConfirmRequest } from "../lib/confirm-outcome";
 
 // --- "Make tfm the default file manager?" Yes/No/Ask-again opt-in. The
 // user's answer lives in a marker file under $XDG_STATE_HOME/tfm/ (next to
@@ -17,7 +18,18 @@ import type { ExecFn } from "../lib/exec-fn";
 export const TFM_DESKTOP_ID = "tfm.desktop";
 export const DIRECTORY_MIME = "inode/directory";
 
-export type FileManagerPromptAnswer = "yes" | "no" | "later";
+// The user's STANDING answer to "should tfm be the default file manager?".
+// Every value here is an ANSWER the user gave — a question that was answered
+// never comes back, so the boot prompt cannot nag.
+//
+//   yes    — Yes, and the set took (tfm IS the default right now)
+//   no     — No (the user declined)
+//   failed — Yes, but the set FAILED (the .desktop entry isn't installed,
+//            xdg-mime refused): the choice was made, the operation did not
+//            land. The retry is explicit (settings row / CLI), never a
+//            boot prompt that re-asks and re-toasts the same failure.
+//   later  — ask again next boot (the only answer that re-opens the question)
+export type FileManagerPromptAnswer = "yes" | "no" | "later" | "failed";
 export type FileManagerPromptVerdict = "ask" | "silent";
 
 export const defaultFileManagerMarker = (): string =>
@@ -36,7 +48,7 @@ type ProbeDeps = {
 const readAnswer = (markerFile: () => string): FileManagerPromptAnswer | null => {
   try {
     const raw = readFileSync(markerFile(), "utf8").trim();
-    if (raw === "yes" || raw === "no" || raw === "later") return raw;
+    if (raw === "yes" || raw === "no" || raw === "later" || raw === "failed") return raw;
     return null;
   } catch {
     return null;
@@ -134,15 +146,21 @@ export const makeDefaultFileManagerOrchestration = (
 // Returns a promise of true when the question surfaced (confirm opened OR
 // fallback toast OR the dialog refused it and said so), false when it stayed
 // silent — a verdict of "ask" must NEVER end silent (that was the "no popup"
-// bug class: swallowed throws with no trace). Dismissing the confirm (No/esc/click-away) records
-// nothing — the dialog only fires onYes — so dismissal asks again by
-// omission. There is deliberately no "later" write: the marker only ever
-// says yes or no.
-export type FileManagerConfirmItem = { message: string; yesLabel: string; onYes: () => void };
-
+// bug class: swallowed throws with no trace).
+//
+// The ANSWER settles the question, whatever it is:
+//   Yes  → the set runs; success records "yes", failure records "failed"
+//   No   → records "no"
+//   esc / click-away (a DISMISSAL, not an answer) → records nothing, so the
+//          next boot may ask it again.
+//
+// Recording the answer is what stops the repeat: the old shape only wrote
+// the marker on a SUCCESSFUL set, so a declined question and a failed set
+// both re-asked on every launch — and the failed set re-toasted the same
+// ".desktop isn't installed" error with it.
 export type FileManagerPromptDeps = {
   choice(): FileManagerPromptVerdict;
-  openConfirm(opts: FileManagerConfirmItem): void;
+  openConfirm(opts: ConfirmRequest): void;
   setDefault(op: "set" | "unset"): Promise<{ ok: boolean; message: string }>;
   record(answer: FileManagerPromptAnswer): void;
   notify(msg: string, title?: string, level?: NotifyLevel): void;
@@ -160,7 +178,9 @@ export type FileManagerPromptDeps = {
   onSettled?: () => void;
 };
 
-export const PROMPT_TITLE = "Make tfm the default file manager?";
+export const PROMPT_TITLE = "Set tfm as default";
+export const PROMPT_BODY = "Make tfm the default file manager? Folder opens will use tfm.";
+export const PROMPT_YES_LABEL = "set as default";
 
 export const makeDefaultFileManagerPrompt = (
   deps: FileManagerPromptDeps,
@@ -179,6 +199,20 @@ export const makeDefaultFileManagerPrompt = (
       }
       if (verdict !== "ask") return false;
     }
+    // the user's answer is what settles the question. ONE writer, and it
+    // never throws into a dialog's click handler.
+    const recordAnswer = (answer: FileManagerPromptAnswer): void => {
+      try {
+        deps.record(answer);
+      } catch (err) {
+        deps.log(`default-file-manager record failed: ${errMessage(err)}`);
+      }
+    };
+    const onNo = (): void => {
+      // the user DECLINED — that is an answer, and an answer is final: the
+      // next boot must not ask again.
+      recordAnswer("no");
+    };
     const onYes = (): void => {
       void (async () => {
         const settled = (): void => {
@@ -193,16 +227,26 @@ export const makeDefaultFileManagerPrompt = (
           res = await deps.setDefault("set");
         } catch (err) {
           deps.log(`default-file-manager set failed: ${errMessage(err)}`);
+          // the user DID answer (Yes) — the operation blew up. Record the
+          // failure so the next boot does not ask the same question again.
+          recordAnswer("failed");
           settled();
           return;
         }
         try {
           if (!res.ok) {
+            // The answer was given; the operation failed. Those are two
+            // facts: only the operation is retryable, and the retry is an
+            // explicit gesture (settings row / CLI), never a boot prompt
+            // that re-asks and re-toasts the same failure every launch.
+            // Record BEFORE notifying: a broken toast must not erase the
+            // answer and bring the same boot question back next launch.
+            recordAnswer("failed");
             deps.notify(res.message, "default file manager", "error");
             settled();
             return;
           }
-          deps.record("yes");
+          recordAnswer("yes");
           // Full combo second half: point browser "show in folder" at
           // tfm too. Best-effort — the mime half already landed.
           if (deps.installService) {
@@ -234,7 +278,13 @@ export const makeDefaultFileManagerPrompt = (
       });
     };
     try {
-      deps.openConfirm({ message: PROMPT_TITLE, yesLabel: "Set as default", onYes });
+      deps.openConfirm({
+        title: PROMPT_TITLE,
+        body: PROMPT_BODY,
+        yesLabel: PROMPT_YES_LABEL,
+        onYes,
+        onNo,
+      });
       return true;
     } catch (err) {
       deps.log(`default-file-manager prompt failed to open: ${errMessage(err)}`);
@@ -250,16 +300,19 @@ export const makeDefaultFileManagerPrompt = (
   };
 };
 
-// should boot ask? A recorded "no" is final (silent). Anything else asks
-// unless tfm is ACTUALLY the default right now — nothing to ask when the
-// user already set it outside tfm. A stale "yes" (recorded yes, but some
-// other handler is default now) re-asks: a yes on disk the user doesn't
-// remember must never silence the prompt forever. A throwing probe asks:
-// failed detection must not wedge boot into silence.
+// should boot ask? A recorded answer the user GAVE is final: "no" (declined)
+// and "failed" (Yes, but the set did not take) are both silent — re-asking a
+// question the user already answered is nagging, and it dragged the same
+// failure toast along with it on every launch. "later" (and an unanswered
+// marker) asks. Anything else asks unless tfm is ACTUALLY the default right
+// now — nothing to ask when the user already set it outside tfm. A stale
+// "yes" (recorded yes, but some other handler is default now) re-asks: a yes
+// on disk the user doesn't remember must never silence the prompt forever. A
+// throwing probe asks: failed detection must not wedge boot into silence.
 export const queryFileManagerChoice = (deps: ProbeDeps = {}): FileManagerPromptVerdict => {
   const markerFile = deps.markerFile ?? defaultFileManagerMarker;
   const answer = readAnswer(markerFile);
-  if (answer === "no") return "silent";
+  if (answer === "no" || answer === "failed") return "silent";
   try {
     const current = deps.currentDefault?.() ?? "";
     if (current.trim() === TFM_DESKTOP_ID) return "silent";

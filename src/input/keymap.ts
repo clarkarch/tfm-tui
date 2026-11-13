@@ -1204,8 +1204,9 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
       case "conflict":
         if (ev.name === "escape") ctx.conflict.closeConflict("skip");
         return true;
-      // yes/no confirm: esc = No, arrows move the No/Yes cursor (focus starts
-      // on No so a stray Enter is safe), openSelected activates it
+      // yes/no confirm: esc = DISMISSAL (not an answer), arrows move the
+      // cursor (focus starts on the affirmative action for every prompt),
+      // openSelected activates it
       case "yesno":
         if (ev.name === "escape") ctx.yesNo.close();
         else if (hitDir(ev, "moveUp", "extendUp") || hitDir(ev, "moveLeft", "extendLeft")) ctx.yesNo.moveFocus(-1);

@@ -24,7 +24,7 @@ import { copyTreeProgress, rmTreeProgress, scanTree } from "./transfer";
 import { sharedOpQueue } from "../lib/op-queue";
 import { checkPluginVeto, sharedPluginHooks } from "../lib/plugin-hooks";
 import type { NotifyLevel } from "../lib/notify-level";
-import type { ConfirmOutcome } from "../lib/confirm-outcome";
+import type { ConfirmOutcome, ConfirmRequest } from "../lib/confirm-outcome";
 import { shouldNotifyTerminal, type OpProgress } from "../lib/file-op-protocol";
 import { isNetworkPath } from "./network";
 import { isArchiveUri } from "./uri";
@@ -611,14 +611,15 @@ export const makeTrashOps = (sink: TrashOpsSink) => {
   return { trashPaths, restoreFromTrash, deleteForever, emptyTrash };
 };
 
-// --- Trash-bound Yes/No wrappers: label + verb bindings onto the floating
-// confirm dialog (both are destructive → danger styling). Extracted so the
-// exact prompts are testable without a renderer. ---
+// --- Trash-bound Yes/No wrappers: the body states the destructive action
+// and its consequence, while the affirmative option carries the verb (both
+// are destructive → danger styling). Extracted so the exact prompts are
+// testable without a renderer. ---
 type TrashConfirmsCtx = {
   // the outcome is part of the contract: "busy" (another question is up) is
   // NOT a decline. The dialog surfaces that refusal itself, so the wrappers
   // below do not have to — but the type keeps the two apart.
-  confirm(message: string, yesLabel: string, onYes: () => void, danger?: boolean): ConfirmOutcome;
+  confirm(request: ConfirmRequest): ConfirmOutcome;
   emptyTrash(): void;
   deleteForever(paths: string[]): void;
 };
@@ -628,19 +629,29 @@ export const makeTrashConfirms = (ctx: TrashConfirmsCtx) => {
     // count is best-effort (home trash only; -1 when unreadable) — the prompt
     // names the count when known so "empty everything" isn't a blind click
     const n = countTrashItems();
-    const what = n >= 0 ? `Empty Trash (${n} item${n === 1 ? "" : "s"})?` : "Empty Trash?";
+    const body =
+      n >= 0
+        ? `Empty the trash? ${n} item${n === 1 ? "" : "s"} removed. This cannot be undone.`
+        : "Empty the trash? Items removed. This cannot be undone.";
     // a refused request (another question is up) is NOT a decline — the
     // dialog already told the user, so nothing fires here
-    ctx.confirm(`${what} This cannot be undone.`, "Empty Trash", () => ctx.emptyTrash(), true);
+    ctx.confirm({
+      title: "Empty trash",
+      body,
+      yesLabel: "empty trash",
+      danger: true,
+      onYes: () => ctx.emptyTrash(),
+    });
   };
 
   const confirmDeleteForever = (paths: string[]): void => {
-    ctx.confirm(
-      `Permanently delete ${paths.length} item${paths.length === 1 ? "" : "s"}? This cannot be undone.`,
-      "Delete permanently",
-      () => ctx.deleteForever(paths),
-      true,
-    );
+    ctx.confirm({
+      title: "Delete permanently",
+      body: `Delete ${paths.length} item${paths.length === 1 ? "" : "s"} permanently? This cannot be undone.`,
+      yesLabel: "delete permanently",
+      danger: true,
+      onYes: () => ctx.deleteForever(paths),
+    });
   };
 
   return { confirmEmptyTrash, confirmDeleteForever };

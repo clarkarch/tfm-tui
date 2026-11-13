@@ -170,7 +170,10 @@ describe("runDefaultFileManagerCli", () => {
     expect(c.out.join("\n")).toContain("forgotten");
   });
 
-  test("a failing set exits 1 and records nothing (a failed yes must re-ask)", async () => {
+  test("a failing set exits 1 and records 'failed' (the choice was made — don't ask again)", async () => {
+    // the user explicitly asked for tfm to be the default; the operation
+    // failed. Recording nothing left the boot prompt to ask the same
+    // question on every launch (and toast the same failure with it).
     const c = collect();
     let recorded = "";
     const code = await runDefaultFileManagerCli(["set"], {
@@ -181,7 +184,7 @@ describe("runDefaultFileManagerCli", () => {
       setDefault: async () => ({ ok: false, message: "boom" }),
     });
     expect(code).toBe(1);
-    expect(recorded).toBe("");
+    expect(recorded).toBe("failed");
     expect(c.err.join("\n")).toContain("boom");
   });
 

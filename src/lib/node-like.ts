@@ -61,6 +61,9 @@ export type NodeLike = {
   // options bag and carry no .d.ts declaration, which is exactly why they need
   // naming here: a theme repaint of the wrong node is otherwise invisible.
   fg?: ColorInput;
+  // terminal text attributes (bold / underline / …), encoded as OpenTUI's u32
+  // attribute bits. Text renderables expose these as a mutable number.
+  attributes?: number;
   bg?: ColorInput;
   backgroundColor?: ColorInput;
   color?: ColorInput | ColorInput[]; // ASCIIFont wordmark

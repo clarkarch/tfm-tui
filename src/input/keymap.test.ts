@@ -347,7 +347,7 @@ describe("precedence chain", () => {
     expect(h.calls).toEqual(["conflict:close:skip"]);
   });
 
-  test("yes/no modal: esc = No, everything else swallowed", () => {
+  test("yes/no modal: esc dismisses, everything else swallowed", () => {
     const h = makeHarness({
       yesNo: {
         isOpen: () => true,
