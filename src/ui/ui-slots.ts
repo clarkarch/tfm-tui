@@ -6,10 +6,19 @@
 // app-content node's opacity, not a scrim that would delete covered rasters.)
 // Renderer/theme arrive via ctx getters — never capture geometry or colors.
 
-import { Box, type CliRenderer, type ColorInput, ImageRenderable, type MouseEvent, Text } from "@opentui/core";
+import {
+  Box,
+  type CliRenderer,
+  type ColorInput,
+  ImageRenderable,
+  type ImageFit,
+  type MouseEvent,
+  Text,
+} from "@opentui/core";
 import { iconPng, brandPng, svgAspect, thumbPng } from "./icons";
 import { swallow } from "../lib/log";
 import type { IconMode, IconStyle, Theme } from "../config/config";
+import type { ThumbnailFitMode } from "../config/config-schema";
 import { intToHex } from "../config/color";
 import { applySurface, btnSurface, iconTransparent, slotBg, type UiStyle } from "./style";
 import type { MaybeNode } from "../lib/node-like";
@@ -253,13 +262,19 @@ export const thumbJobRank = (j: ThumbJob): number => (j.priority ? 0 : j.visible
 export const thumbJobKey = (j: ThumbJob): string =>
   [j.path, j.mtimeMs, j.size, j.wCells, j.hCells ?? "", j.vector ? 1 : 0, j.video ? 1 : 0].join("|");
 
-// How the mounted raster is fitted into its cell box. Raster/video rasters are
-// either aspect-preserving (Bun.Image `fit:"inside"`) or exact-box (ffmpeg
-// cover-crop; magick `^`+extent), so cover-crop them to fill the tile. SVG
-// thumbs via resvg are ALSO aspect-preserving but must be CONTAINED (contain
-// letterboxes; cover would crop the drawing's edges) — that was the old
-// `fit:"fit"` behavior, restored here for vectors only.
-export const thumbImageFit = (vector: boolean): "fit" | "cover" => (vector ? "fit" : "cover");
+// The global thumbnail policy maps to OpenTUI's fit vocabulary in ONE place.
+// Every thumbnail source and every thumbnail surface uses this mapping: the
+// old vector/raster split let SVG drawings contain while photos/video cropped.
+export const thumbImageFit = (mode: ThumbnailFitMode): ImageFit => {
+  switch (mode) {
+    case "crop":
+      return "cover";
+    case "stretch":
+      return "fill";
+    case "fit":
+      return "fit";
+  }
+};
 
 // --- Floating-layer roots ---
 // A slot inside one of these is a FLOAT child. Two decisions hang off it: the
@@ -293,6 +308,10 @@ export type SlotsCtx = {
   uiStyle(): string;
   // [ui] icons — read live like uiStyle (mode flip re-rasters)
   iconsMode(): IconMode;
+  // [ui] thumbnail-fit — read live for every drain and for the mounted-image
+  // update path. REQUIRED: a context that forgot the global policy would
+  // silently mount every thumbnail under a different rule.
+  thumbnailFit(): ThumbnailFitMode;
   // [ui] icon-style — read live (toggle re-rasters via resetIconQueue).
   // Optional so test fakes keep working (absent = filled).
   iconStyle?(): IconStyle;
@@ -394,6 +413,8 @@ export const makeSlots = (ctx: SlotsCtx) => {
     const cellH = res ? res.height / r.terminalHeight : 20;
     return { cellW, cellH, aspect: cellH > 0 ? cellH / cellW : 2 };
   };
+
+  const currentThumbFit = (): ImageFit => thumbImageFit(ctx.thumbnailFit());
 
   const makeIconSlot = <F extends IconFamily = IconFamily>(
     name: string,
@@ -530,13 +551,18 @@ export const makeSlots = (ctx: SlotsCtx) => {
             source: bytes,
             width: j.wCells,
             height: hCells,
-            // rasters/video cover-crop into the tile; SVG vectors contain (see
-            // thumbImageFit) — icons keep fit:"fit" at their own site
-            fit: thumbImageFit(j.vector),
+            // one global policy for every thumbnail source and surface
+            fit: currentThumbFit(),
             protocol: "auto",
             placementOpacity: floatThumb && rasterDim != null ? 1 : undefined,
           });
           if (img.loadPromise) await img.loadPromise;
+          // the policy can change while the source is decoding/loading. The
+          // image is not mounted yet, so the live-update walk cannot see it;
+          // settle on the CURRENT policy immediately before mounting.
+          try {
+            img.fit = currentThumbFit();
+          } catch {}
           // RE-RESOLVE: a rebuild during the raster detached the captured node;
           // writing into it leaked a native image buffer and painted nowhere.
           // A same-id replacement is the live slot, so use the fresh lookup.
@@ -576,6 +602,20 @@ export const makeSlots = (ctx: SlotsCtx) => {
     // entry, so it grew for the whole session
     for (const [slotId, owner] of thumbOwners) {
       if (owner.node && isDeadSlot(owner.node)) thumbOwners.delete(slotId);
+    }
+  };
+
+  // Apply the live global policy to every mounted thumbnail. The source
+  // pixels are policy-independent (all producers preserve the whole image),
+  // so a mode change is a cheap draw-policy update rather than a re-raster.
+  const syncThumbnailFit = (): void => {
+    const fit = currentThumbFit();
+    for (const slotId of thumbOwners.keys()) {
+      const img = ctx.byId(`${slotId}-t`);
+      if (!img) continue;
+      try {
+        (img as { fit?: ImageFit }).fit = fit;
+      } catch {}
     }
   };
 
@@ -896,6 +936,7 @@ export const makeSlots = (ctx: SlotsCtx) => {
     setIconState,
     drainThumbs,
     drainIconQueue: requestDrain,
+    syncThumbnailFit,
     setRasterDim,
     nextIconId: (): string => `tfm-icon-${iconSeq++}`,
     resetIconQueue: (): void => {

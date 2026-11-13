@@ -41,6 +41,10 @@ type RethemeCtx = {
   // (rapid A->B->A cycling re-rendered A from scratch)
   clearFailedThumbs(): void;
   resetIconQueue(): void;
+  // [ui] thumbnail-fit: update every mounted grid/list/preview/properties
+  // thumbnail before renderAll. The source pixels are policy-independent, so
+  // this is a live draw-policy flip rather than a re-raster.
+  syncThumbnailFit(): void;
   syncTerminalTheme(): void;
   // live-resize for the RENDER_EXEMPT terminal-height knob (no renderAll):
   // the open pane resizes its VT node itself. Optional so tests stay light.
@@ -359,6 +363,13 @@ export const makeRetheme = (ctx: RethemeCtx) => {
     // edits never touch AppState — only the GUI row and the remap bind do)
     try {
       ctx.syncShowHidden?.();
+    } catch {}
+    // every mounted thumbnail (grid/list, preview, properties hero) follows
+    // the same global policy. Update the live draw policy BEFORE renderAll:
+    // an unchanged grid listing may skip its rebuild, and the visible images
+    // must still change immediately.
+    try {
+      ctx.syncThumbnailFit();
     } catch {}
 
     if (themeChanged) {

@@ -79,7 +79,6 @@ export const wireGrid = (deps: {
     // effective width is 0 then, and the work is invisible native churn
     visible: () => core.geometry.previewEff > 0 && core.config.ui.previewEnabled,
     termH: () => chrome.renderer.terminalHeight,
-    cellMetrics: core.slots.cellMetrics,
     focusKey: () => {
       // resolve the index once and read through `?? null` — the original read
       // the key twice and asserted the second read non-null

@@ -1,5 +1,14 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { truncateSync, writeFileSync, existsSync, mkdtempSync, readdirSync, rmSync, chmodSync } from "node:fs";
+import {
+  truncateSync,
+  writeFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  rmSync,
+  chmodSync,
+} from "node:fs";
 import { inflateSync } from "node:zlib";
 import os from "node:os";
 import path from "node:path";
@@ -18,6 +27,7 @@ import {
   loadEmbeddedIcons,
   lruGet,
   lruSet,
+  magickFitTail,
   pickSvgRenderer,
   planLetterboxedSvg,
   pngFromProc,
@@ -28,6 +38,7 @@ import {
   thumbCacheKey,
   thumbCooloffMs,
   thumbPng,
+  videoThumbFilter,
 } from "./icons";
 
 // exercises the real resvg-js/magick pipeline (dev-machine deps); failures
@@ -415,6 +426,21 @@ describe("icons", () => {
     clearIconCaches();
   });
 
+  test("fallback thumbnails preserve the whole source instead of baking in a crop", () => {
+    // The final fit/crop/stretch policy belongs to the mounted ImageRenderable.
+    // A fallback lane that cover-crops its pixels would make `fit` unable to
+    // recover the cropped edges and `stretch` unable to undo them.
+    const args = magickFitTail("/tmp/photo.png", 64, 32, "#1a1b26");
+    expect(args).toContain("-thumbnail");
+    expect(args).toContain("64x32");
+    expect(args).not.toContain("64x32^");
+    expect(args).not.toContain("-extent");
+  });
+
+  test("video thumbnails preserve aspect ratio instead of scaling up and center-cropping", () => {
+    expect(videoThumbFilter(48, 64)).toBe("scale=48:64:force_original_aspect_ratio=decrease");
+  });
+
   test.skipIf(!hasSvgRenderer)("vector thumbs use the shared SVG renderer (exact dims per renderer)", async () => {
     clearIconCaches();
     const svg =
@@ -426,17 +452,12 @@ describe("icons", () => {
     const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
     const w = dv.getUint32(16); // IHDR width
     const h = dv.getUint32(20); // IHDR height
-    // Exact dims pin WHICH renderer ran: the in-process addon fit-insides
-    // (square 24x24 at 64x48 → 48x48); the magick last resort keeps the
-    // exact cover box 64x48. A `<= requested` assertion would pass for both
-    // and prove nothing.
-    if (hasInproc) {
-      expect(w).toBe(48);
-      expect(h).toBe(48);
-    } else {
-      expect(w).toBe(64);
-      expect(h).toBe(48);
-    }
+    // Exact dims pin WHICH renderer ran and the source SHAPE it produced:
+    // both lanes now fit the square source inside 64x48 (48x48). The old
+    // magick fallback cover-cropped to the exact 64x48 box, which baked the
+    // loss of the source edges into the pixels before the draw policy ran.
+    expect(w).toBe(48);
+    expect(h).toBe(48);
   });
 
   test("raster thumbs come from Bun.Image (aspect-preserving 2x, not magick's exact box)", async () => {
@@ -614,6 +635,35 @@ describe("icons", () => {
     },
   );
 
+  test("the v4 thumbnail cache salt ignores old cropped fallback/video pixels", async () => {
+    // v3 cached magick-fallback/video pixels with the crop already baked in.
+    // The global fit policy needs the original edges, so the current cache
+    // path must not read that old entry. This pins the behavior rather than
+    // the version spelling: any newer salt still rejects the v3 file.
+    const prevCache = process.env.XDG_CACHE_HOME;
+    const sandbox = mkdtempSync(path.join(os.tmpdir(), "tfm-thumb-v3-salt-"));
+    process.env.XDG_CACHE_HOME = path.join(sandbox, "cache");
+    try {
+      clearIconCaches();
+      const source = path.join(sandbox, "source.png");
+      writeFileSync(source, Buffer.from(PNG_6x2, "base64"));
+      const key = thumbCacheKey(source, 1, 1, 32, 32, "#1a1b26", "raster");
+      const oldName = `${new Bun.CryptoHasher("sha1").update(`v3:${key}`).digest("hex").slice(0, 20)}.png`;
+      const thumbDir = path.join(process.env.XDG_CACHE_HOME!, "tfm", "thumbs");
+      mkdirSync(thumbDir, { recursive: true });
+      writeFileSync(path.join(thumbDir, oldName), Buffer.from([1, 2, 3]));
+
+      const bytes = await thumbPng(source, 1, 1, 32, 32, "#1a1b26");
+      expect([bytes[0], bytes[1], bytes[2], bytes[3]]).toEqual([0x89, 0x50, 0x4e, 0x47]);
+      expect(Array.from(bytes.slice(0, 3))).not.toEqual([1, 2, 3]);
+    } finally {
+      if (prevCache === undefined) delete process.env.XDG_CACHE_HOME;
+      else process.env.XDG_CACHE_HOME = prevCache;
+      rmSync(sandbox, { recursive: true, force: true });
+      clearIconCaches();
+    }
+  });
+
   // ffmpeg frame generation + raster is slow under parallel-suite load — the
   // 5s bun default is a coin flip here (AGENTS: heavy tests pin their own)
   test.skipIf(!hasVideoBin)(
@@ -642,8 +692,10 @@ describe("icons", () => {
         const bytes = await thumbPng(tmp, 4, 1, 48, 64, "#1a1b26", false, true);
         expect([bytes[0], bytes[1], bytes[2], bytes[3]]).toEqual([0x89, 0x50, 0x4e, 0x47]);
         const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+        // the square source fits inside 48x64 without cropping: 48x48, not
+        // the old increase+crop result 48x64
         expect(dv.getUint32(16)).toBe(48); // IHDR width
-        expect(dv.getUint32(20)).toBe(64); // IHDR height
+        expect(dv.getUint32(20)).toBe(48); // IHDR height
       } finally {
         rmSync(tmp, { force: true });
       }

@@ -228,7 +228,14 @@ export const makeGridBuilders = (ctx: GridRendererCtx) => {
 
     const dim = entry.name.startsWith(".");
     const baseFg = dim ? colors.sidebarFgMuted : colors.sidebarFg;
-    const slotW = Math.max(1, Math.round(aspect * ICON_CELLS_H));
+    // Ordinary icons keep their compact physical-square slot. A thumbnail's
+    // REAL destination is the tile's rectangular content area: the old
+    // square-pixel icon box made `fit` contain the source inside an invented
+    // 1:1 frame, so wide/portrait images looked tiny and crop/stretch did not
+    // fill the tile. One cell of inset on each side keeps neighbouring tiles
+    // visually separate.
+    const iconSlotW = Math.max(1, Math.round(aspect * ICON_CELLS_H));
+    const thumbSlotW = Math.max(1, TILE_W - 2);
 
     const { isVideo, stat, useThumb } = thumbPlanFor(entry, key);
 
@@ -239,7 +246,7 @@ export const makeGridBuilders = (ctx: GridRendererCtx) => {
       slotId = ctx.nextIconId();
       iconSlotEl = Box({
         id: slotId,
-        width: slotW,
+        width: thumbSlotW,
         height: ICON_CELLS_H,
         flexDirection: "row",
         justifyContent: "center",
@@ -273,6 +280,7 @@ export const makeGridBuilders = (ctx: GridRendererCtx) => {
     const liftOpts = ctx.hoverLiftOpts?.();
     const liftDir = liftOpts?.direction ?? "up";
     const liftSpareV = TILE_H - ICON_CELLS_H - 1;
+    const slotW = useThumb ? thumbSlotW : iconSlotW;
     const liftSpareH = TILE_W - slotW;
     const hoverLift =
       (liftOpts?.enabled ?? false) &&
@@ -349,7 +357,8 @@ export const makeGridBuilders = (ctx: GridRendererCtx) => {
         path: key,
         mtimeMs: stat.mtimeMs,
         size: stat.size,
-        wCells: slotW,
+        wCells: thumbSlotW,
+        hCells: ICON_CELLS_H,
         vector: entry.name.toLowerCase().endsWith(".svg"),
         video: isVideo,
         visible: inViewport,

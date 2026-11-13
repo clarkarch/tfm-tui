@@ -38,6 +38,7 @@ export type _EasePropIsTheRowSet = Expect<Same<UiConfig["fileAnimationEase"], En
 export type _CollapsePropIsTheRowSet = Expect<
   Same<UiConfig["sidebarCollapseStyle"], EnumValues<"sidebarCollapseStyle">>
 >;
+export type _ThumbnailFitPropIsTheRowSet = Expect<Same<UiConfig["thumbnailFit"], EnumValues<"thumbnailFit">>>;
 // the sort mode is the ONE mode whose type lives in a LEAF (lib/sort.ts —
 // fs/ and app/ need it without importing config/), so it cannot be derived
 // FROM the schema (that would invert the layering). The two copies must
@@ -196,6 +197,16 @@ describe("parseConfigDoc", () => {
     expect(parseConfigDoc({ ui: { icons: "transparent" } }).ui.icons).toBe("transparent");
     expect(parseConfigDoc({ ui: { icons: "transparent-partial" } }).ui.icons).toBe("transparent-partial");
     expect(parseConfigDoc({ ui: { icons: "yes" } }).ui.icons).toBe("opaque");
+  });
+
+  test("thumbnail-fit defaults to fit and parses every global thumbnail policy", () => {
+    expect(parseConfigDoc(undefined).ui.thumbnailFit).toBe("fit");
+    expect(parseConfigDoc({ ui: { "thumbnail-fit": "fit" } }).ui.thumbnailFit).toBe("fit");
+    expect(parseConfigDoc({ ui: { "thumbnail-fit": "crop" } }).ui.thumbnailFit).toBe("crop");
+    expect(parseConfigDoc({ ui: { "thumbnail-fit": "stretch" } }).ui.thumbnailFit).toBe("stretch");
+    // a hand-edited value outside the row's legal set keeps the row default
+    expect(parseConfigDoc({ ui: { "thumbnail-fit": "fill" } }).ui.thumbnailFit).toBe("fit");
+    expect(parseConfigDoc({ ui: { "thumbnail-fit": true } }).ui.thumbnailFit).toBe("fit");
   });
 
   test("icons ignores the impossible legacy boolean form", () => {

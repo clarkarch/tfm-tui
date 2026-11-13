@@ -19,6 +19,7 @@ import {
   type ThumbJob,
 } from "./ui-slots";
 import type { Theme } from "../config/config";
+import type { ThumbnailFitMode } from "../config/config-schema";
 import { NavIdx, PlainIdx, SelectIdx, ToggleIdx } from "../lib/icon-state";
 
 // icon rasters need one of the SVG renderers (same gate as icons.test.ts)
@@ -62,6 +63,7 @@ const makeHarness = () => {
     colors: () => ({ bg: BG, sidebarFgMuted: FG, sidebarBg: BG, hoverBg: BG, white: "#fff" }) as unknown as Theme,
     uiStyle: () => "solid",
     iconsMode: () => "opaque",
+    thumbnailFit: () => "fit",
     iconStyle: () => iconStyle,
     iconCells: () => 3,
     glyphFor: (name) => (iconStyle === "outline" ? `O:${name}` : "F"),
@@ -436,22 +438,22 @@ describe("thumbJobRank", () => {
   });
 });
 
-// The fit mapping is a pure decision, tested here so it guards CI too (the
-// mounted tests below skip when the SVG/magick renderers are absent): rasters
-// and video cover-crop into the tile, SVG vectors contain. Getting this wrong
-// crops SVG drawings — the exact regression this pins.
+// The global thumbnail policy maps to OpenTUI's fit vocabulary in ONE place.
+// Every thumbnail source and every thumbnail surface uses this mapping — the
+// old vector/raster split let SVG drawings contain while photos/video cropped.
 describe("thumbImageFit", () => {
-  test("rasters/video cover-crop; SVG vectors contain", () => {
-    expect(thumbImageFit(false)).toBe("cover");
-    expect(thumbImageFit(true)).toBe("fit");
+  test("fit contains, crop covers, and stretch fills", () => {
+    expect(thumbImageFit("fit")).toBe("fit");
+    expect(thumbImageFit("crop")).toBe("cover");
+    expect(thumbImageFit("stretch")).toBe("fill");
   });
 });
 
 // Renderer-backed (createTestRenderer pilot: ui-menu.test.ts): drainThumbs
 // mounts a REAL ImageRenderable, pinning the raster→renderable coupling that
-// fake-ctx tests can't see — a raster thumb is aspect-preserving (Bun.Image
-// fit:"inside", see icons.test.ts) and must be cover-cropped into the cell box;
-// a `fit:"fit"` revert would letterbox/contain it instead of filling the tile.
+// fake-ctx tests can't see. The source pixels preserve the whole image (see
+// icons.test.ts), and the mounted image applies the global fit/crop/stretch
+// policy at draw time.
 describe("thumbnail mount", () => {
   // 6x2 PNG — same fixture as icons.test.ts
   const PNG_6x2 =
@@ -477,13 +479,14 @@ describe("thumbnail mount", () => {
     rmSync(cacheSandbox, { recursive: true, force: true });
   });
 
-  const mkSlots = () =>
+  const mkSlots = (thumbnailFit: () => ThumbnailFitMode = () => "fit") =>
     makeSlots({
       renderer: () => t.renderer,
       byId: (id) => t.renderer.root.findDescendantById(id),
       colors: () => ({ bg: BG, sidebarFgMuted: FG, sidebarBg: BG, hoverBg: BG, white: "#fff" }) as unknown as Theme,
       uiStyle: () => "solid",
       iconsMode: () => "opaque",
+      thumbnailFit,
       iconCells: () => 4,
       glyphFor: () => "F",
       isTtyMode: () => false,
@@ -509,13 +512,36 @@ describe("thumbnail mount", () => {
     return { dir, p };
   };
 
-  test('a drained raster thumb mounts with fit:"cover"', async () => {
-    const slotId = "tfm-tile-0-thumb";
+  test("every drained raster thumbnail uses the global thumbnail policy", async () => {
+    for (const [mode, expected] of [
+      ["fit", "fit"],
+      ["crop", "cover"],
+      ["stretch", "fill"],
+    ] as const) {
+      const slotId = `tfm-tile-policy-${mode}-thumb`;
+      t.renderer.root.add(Box({ id: slotId, width: 8, height: 8 }));
+      await t.renderOnce();
+      const { dir, p } = writePng(`${mode}.png`);
+      const slots = mkSlots(() => mode);
+      slots.pushThumbJob({ slotId, path: p, mtimeMs: 1, size: 1, wCells: 4, vector: false, fallbackGlyph: "F" });
+      openResolution();
+      await slots.drainThumbs();
+      await t.renderOnce();
+
+      const img = t.renderer.root.findDescendantById(`${slotId}-t`) as any;
+      expect(img).toBeTruthy();
+      expect(img.fit).toBe(expected);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test.skipIf(!hasSvgRenderer)("SVG thumbnails obey the same global policy as raster thumbnails", async () => {
+    const slotId = "tfm-tile-policy-svg-thumb";
     t.renderer.root.add(Box({ id: slotId, width: 8, height: 8 }));
     await t.renderOnce();
-    const { dir, p } = writePng();
-    const slots = mkSlots();
-    slots.pushThumbJob({ slotId, path: p, mtimeMs: 1, size: 1, wCells: 4, vector: false, fallbackGlyph: "F" });
+    const { dir, p } = writeSvg("policy.svg");
+    const slots = mkSlots(() => "crop");
+    slots.pushThumbJob({ slotId, path: p, mtimeMs: 1, size: 1, wCells: 4, vector: true, fallbackGlyph: "F" });
     openResolution();
     await slots.drainThumbs();
     await t.renderOnce();
@@ -525,6 +551,97 @@ describe("thumbnail mount", () => {
     expect(img.fit).toBe("cover");
     rmSync(dir, { recursive: true, force: true });
   });
+
+  test("changing the live policy updates every mounted thumbnail surface and future drains", async () => {
+    // grid, list, preview, and the properties hero all feed the SAME slot
+    // owner. One live update must therefore reach every mounted owner, not
+    // only the first one, and a later drain must use the new policy.
+    const mountedIds = [
+      "tfm-tile-policy-grid-thumb",
+      "tfm-tile-policy-list-thumb",
+      "tfm-preview-policy-thumb",
+      "tfm-props-policy-thumb",
+    ];
+    const futureId = "tfm-tile-policy-future-thumb";
+    for (const slotId of [...mountedIds, futureId]) {
+      t.renderer.root.add(Box({ id: slotId, width: 8, height: 8 }));
+    }
+    await t.renderOnce();
+    const { dir, p } = writePng("live-policy.png");
+    let mode: ThumbnailFitMode = "fit";
+    const slots = mkSlots(() => mode);
+    openResolution();
+
+    for (const slotId of mountedIds) {
+      slots.pushThumbJob({
+        slotId,
+        path: p,
+        mtimeMs: 1,
+        size: 1,
+        wCells: 4,
+        vector: false,
+        fallbackGlyph: "F",
+      });
+    }
+    await slots.drainThumbs();
+    await t.renderOnce();
+    const mounted = mountedIds.map((slotId) => t.renderer.root.findDescendantById(`${slotId}-t`) as any);
+    expect(mounted.every((img) => img?.fit === "fit")).toBe(true);
+
+    mode = "crop";
+    slots.syncThumbnailFit();
+    await t.renderOnce();
+    expect(mounted.every((img) => img?.fit === "cover")).toBe(true);
+
+    mode = "stretch";
+    slots.syncThumbnailFit();
+    slots.pushThumbJob({
+      slotId: futureId,
+      path: p,
+      mtimeMs: 1,
+      size: 1,
+      wCells: 4,
+      vector: false,
+      fallbackGlyph: "F",
+    });
+    await slots.drainThumbs();
+    await t.renderOnce();
+    const future = t.renderer.root.findDescendantById(`${futureId}-t`) as any;
+    expect(mounted.every((img) => img?.fit === "fill")).toBe(true);
+    expect(future.fit).toBe("fill");
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test.skipIf(!hasSvgRenderer)(
+    "a policy change while a thumbnail raster is in flight mounts the latest policy",
+    async () => {
+      const slotId = "tfm-tile-policy-inflight-thumb";
+      t.renderer.root.add(Box({ id: slotId, width: 8, height: 8 }));
+      await t.renderOnce();
+      const svg = writeSvg("policy-inflight.svg");
+      let mode: ThumbnailFitMode = "fit";
+      const slots = mkSlots(() => mode);
+      openResolution();
+
+      slots.pushThumbJob({
+        slotId,
+        path: svg.p,
+        mtimeMs: 1,
+        size: 1,
+        wCells: 4,
+        vector: true,
+        fallbackGlyph: "F",
+      });
+      const drain = slots.drainThumbs();
+      mode = "crop";
+      await drain;
+      await t.renderOnce();
+
+      const img = t.renderer.root.findDescendantById(`${slotId}-t`) as any;
+      expect(img.fit).toBe("cover");
+      rmSync(svg.dir, { recursive: true, force: true });
+    },
+  );
 
   test("a narrower raster centers in its slot (the slot-internal half of hero centering)", async () => {
     // prod thumb slots (grid/list/props hero) are row+center boxes: a raster
@@ -796,6 +913,7 @@ describe("thumbnail mount", () => {
         colors: () => ({ bg: BG, sidebarFgMuted: FG, sidebarBg: BG, hoverBg: BG, white: "#fff" }) as unknown as Theme,
         uiStyle: () => "solid",
         iconsMode: () => "opaque",
+        thumbnailFit: () => "fit",
         transparentForce: () => force,
         iconCells: () => 4,
         glyphFor: () => "F",
@@ -824,6 +942,7 @@ describe("thumbnail mount", () => {
       colors: () => ({ bg: BG, sidebarFgMuted: FG, sidebarBg: BG, hoverBg: BG, white: "#fff" }) as unknown as Theme,
       uiStyle: () => "solid",
       iconsMode: () => "opaque",
+      thumbnailFit: () => "fit",
       transparentForce: () => true,
       iconCells: () => 4,
       glyphFor: () => "F",
@@ -870,6 +989,7 @@ describe("icon slot alignment", () => {
       colors: () => ({ bg: BG, sidebarFgMuted: FG, sidebarBg: BG, hoverBg: BG, white: "#fff" }) as unknown as Theme,
       uiStyle: () => "solid",
       iconsMode: () => "opaque",
+      thumbnailFit: () => "fit",
       iconCells: () => 3,
       glyphFor: () => "F",
       isTtyMode: () => false,

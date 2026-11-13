@@ -2,12 +2,13 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { Box, type CliRenderer, CodeRenderable, LineNumberRenderable, MarkdownRenderable } from "@opentui/core";
 import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
 import type { MaybeNode } from "../lib/node-like";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { defaultConfig, type Theme } from "../config/config";
 import type { WrapMode } from "../config/config-schema";
 import { makePreview, previewCacheKey, previewThemeSig } from "./ui-preview";
+import type { ThumbJob } from "./ui-slots";
 import type { Scheduler } from "../lib/uiutil";
 
 // Manual clock: debounced clears its pending handle, so a coalescing test can
@@ -53,7 +54,13 @@ const mkPane = () => {
 
 const COLORS: any = { sidebarFg: "#aaa", sidebarFgMuted: "#666", divider: "#333", white: "#fff", sidebarBg: "#000" };
 
-const mkPreview = (opts: { visible: boolean; clock: ReturnType<typeof mkClock>; pane: ReturnType<typeof mkPane> }) =>
+const mkPreview = (opts: {
+  visible: boolean;
+  clock: ReturnType<typeof mkClock>;
+  pane: ReturnType<typeof mkPane>;
+  focusKey?: string | null;
+  jobs?: ThumbJob[];
+}) =>
   makePreview({
     renderer: null as unknown as CliRenderer,
     byId: () => opts.pane.node as unknown as MaybeNode,
@@ -64,10 +71,9 @@ const mkPreview = (opts: { visible: boolean; clock: ReturnType<typeof mkClock>; 
     visible: () => opts.visible,
     sched: opts.clock.sched,
     termH: () => 24,
-    cellMetrics: () => ({ cellW: 10, cellH: 20, aspect: 0.5 }),
-    focusKey: () => null,
+    focusKey: () => opts.focusKey ?? null,
     tileRefs: new Map(),
-    pushThumbJob: () => {},
+    pushThumbJob: (job) => opts.jobs?.push(job),
     drainThumbs: () => {},
     drainIconQueue: () => {},
     nextIconId: () => "slot",
@@ -104,6 +110,54 @@ describe("preview visibility guard", () => {
     // would still be queued and flush would render twice
     expect(once).toBeGreaterThan(0);
     expect(once).toBe(2); // the "no selection" Box + Text pair, exactly once
+  });
+});
+
+describe("preview thumbnail target geometry", () => {
+  test("a mounted preview thumbnail fills the pane's rectangular content area", async () => {
+    const t = await createTestRenderer({ width: 60, height: 30 });
+    const clock = mkClock();
+    const jobs: ThumbJob[] = [];
+    const dir = mkdtempSync(path.join(os.tmpdir(), "tfm-preview-thumb-geometry-"));
+    try {
+      const file = path.join(dir, "photo.png");
+      writeFileSync(file, "x");
+      // Mirror the production preview pane: one cell of left/right padding.
+      const pane = Box({ id: "tfm-preview", width: 40, height: 24, paddingLeft: 1, paddingRight: 1 });
+      t.renderer.root.add(pane);
+      const preview = makePreview({
+        renderer: t.renderer,
+        byId: (id) => t.renderer.root.findDescendantById(id),
+        colors: () => COLORS as Theme,
+        uiStyle: () => "solid",
+        previewEnabled: () => true,
+        previewWidth: () => 40,
+        termH: () => 24,
+        focusKey: () => file,
+        tileRefs: new Map(),
+        pushThumbJob: (job) => jobs.push(job),
+        drainThumbs: () => {},
+        drainIconQueue: () => {},
+        nextIconId: () => "preview-geometry-slot",
+        fallbackGlyphFor: () => "?",
+        sched: clock.sched,
+      });
+
+      preview.renderPreview();
+      clock.flush();
+      await t.renderOnce();
+
+      expect(jobs).toHaveLength(1);
+      expect(jobs[0]?.wCells).toBe(38); // preview width 40 minus its one-cell left/right padding
+      expect(jobs[0]?.hCells).toBe(22); // terminal height 24 minus the filename + divider rows
+      const slot = t.renderer.root.findDescendantById("preview-geometry-slot") as any;
+      expect(slot).toBeTruthy();
+      expect(slot.width).toBe(38);
+      expect(slot.height).toBe(22);
+    } finally {
+      await t.dispose();
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -157,7 +211,6 @@ const mkLivePreview = (file: string, wrap: WrapMode = "none") => {
     previewEnabled: () => true,
     previewWidth: () => 40,
     termH: () => 24,
-    cellMetrics: () => ({ cellW: 10, cellH: 20, aspect: 0.5 }),
     focusKey: () => file,
     tileRefs: new Map(),
     pushThumbJob: () => {},
@@ -284,7 +337,6 @@ describeNonRoot("sudo preview", () => {
         previewEnabled: () => true,
         previewWidth: () => 40,
         termH: () => 24,
-        cellMetrics: () => ({ cellW: 10, cellH: 20, aspect: 0.5 }),
         focusKey: () => file,
         tileRefs: new Map(),
         pushThumbJob: () => {},
@@ -341,7 +393,6 @@ describe("preview rich rendering", () => {
       previewEnabled: () => true,
       previewWidth: () => 40,
       termH: () => 24,
-      cellMetrics: () => ({ cellW: 10, cellH: 20, aspect: 0.5 }),
       focusKey: () => file,
       tileRefs: new Map(),
       pushThumbJob: () => {},
@@ -396,7 +447,6 @@ describe("preview rich rendering", () => {
         previewEnabled: () => true,
         previewWidth: () => 40,
         termH: () => 18, // bodyH = termH - 6 = 12
-        cellMetrics: () => ({ cellW: 10, cellH: 20, aspect: 0.5 }),
         focusKey: () => file,
         tileRefs: new Map(),
         pushThumbJob: () => {},
@@ -447,7 +497,6 @@ describe("preview rich rendering", () => {
       previewEnabled: () => true,
       previewWidth: () => 40,
       termH: () => h,
-      cellMetrics: () => ({ cellW: 10, cellH: 20, aspect: 0.5 }),
       focusKey: () => file,
       tileRefs: new Map(),
       pushThumbJob: () => {},
@@ -489,7 +538,6 @@ describe("preview rich rendering", () => {
         previewEnabled: () => true,
         previewWidth: () => 40,
         termH: () => 12, // bodyH = termH - 6 = 6
-        cellMetrics: () => ({ cellW: 10, cellH: 20, aspect: 0.5 }),
         focusKey: () => file,
         tileRefs: new Map(),
         pushThumbJob: () => {},
@@ -594,7 +642,6 @@ describe("preview rich rendering", () => {
       previewEnabled: () => true,
       previewWidth: () => 40,
       termH: () => 24,
-      cellMetrics: () => ({ cellW: 10, cellH: 20, aspect: 0.5 }),
       focusKey: () => file,
       tileRefs: new Map(),
       pushThumbJob: () => {},
@@ -632,7 +679,6 @@ describe("preview rich rendering", () => {
         previewEnabled: () => true,
         previewWidth: () => 40,
         termH: () => 18,
-        cellMetrics: () => ({ cellW: 10, cellH: 20, aspect: 0.5 }),
         focusKey: () => file,
         tileRefs: new Map(),
         pushThumbJob: () => {},

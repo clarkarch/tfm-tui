@@ -209,6 +209,15 @@ describe("settingGroups shape", () => {
     ]);
   });
 
+  test("the thumbnail-fit row exposes the three user-facing policies", () => {
+    const h = mk();
+    const row = asCycle(h.byLabel("thumbnail fit"));
+    expect(row.names).toEqual(["fit", "crop", "stretch"]);
+    expect(row.get()).toEqual({ kind: "index", index: 0 });
+    row.setIdx(1);
+    expect(h.config.ui.thumbnailFit).toBe("crop");
+  });
+
   test("every surfaced row carries a plain-language one-line blurb (description footer)", () => {
     const h = mk();
     withMasters(h, true);
@@ -409,6 +418,7 @@ describe("settingGroups shape", () => {
       "theme",
       "transparent bg",
       "icons",
+      "thumbnail fit",
       "icon style",
       "ui style",
       "scrim",

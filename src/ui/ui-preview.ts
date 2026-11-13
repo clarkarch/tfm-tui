@@ -76,7 +76,6 @@ type PreviewCtx = {
   // of clearing + re-allocating the pane per step; injectable for tests
   sched?: Scheduler;
   termH(): number; // renderer.terminalHeight — LIVE read
-  cellMetrics(): { cellW: number; cellH: number; aspect: number };
   focusKey(): string | null; // focused tile's key, else null
   tileRefs: Map<string, { selected: boolean }>; // tileRefsByKey — shared by ref; only .forEach read here
   pushThumbJob(job: ThumbJob): void; // thumbJobs is SWAPPED (reassigned) by drainThumbs — never capture the array
@@ -281,9 +280,14 @@ export const makePreview = (ctx: PreviewCtx) => {
       st.size > 0 &&
       st.size <= 26214400
     ) {
-      const w = Math.max(4, ctx.previewWidth() - 4);
-      const maxH = Math.max(4, ctx.termH() - 8);
-      const h = Math.min(maxH, Math.max(3, Math.round(w / ctx.cellMetrics().aspect)));
+      // The REAL preview destination is the pane's content rectangle: one
+      // cell of horizontal padding on each side, and the filename + divider
+      // rows above the image. The old width/aspect formula invented a square
+      // physical-pixel box, so fit contained the source inside that imaginary
+      // 1:1 frame (tiny wide/portrait images) and crop/stretch never filled
+      // the actual preview surface.
+      const w = Math.max(4, ctx.previewWidth() - 2);
+      const h = Math.max(3, ctx.termH() - 2);
       const slotId = ctx.nextIconId();
       pane.add(
         Box(

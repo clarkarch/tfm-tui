@@ -74,6 +74,7 @@ const mkCtx = () => {
     clearIconCaches: 0,
     clearFailedThumbs: 0,
     resetIconQueue: 0,
+    syncThumbnailFit: 0,
     syncTerminalTheme: 0,
     syncTerminalHeight: 0,
     repaintButtons: 0,
@@ -119,6 +120,9 @@ const mkCtx = () => {
     },
     resetIconQueue: () => {
       calls.resetIconQueue++;
+    },
+    syncThumbnailFit: () => {
+      calls.syncThumbnailFit++;
     },
     syncTerminalTheme: () => {
       calls.syncTerminalTheme++;
@@ -521,6 +525,24 @@ describe("applyConfig", () => {
     fresh.ui.sidebarWidth = 31;
     retheme.applyConfig(fresh);
     expect(ctx.calls.renderAll).toBe(1);
+  });
+
+  test("a thumbnail-policy change updates mounted thumbnails before the repaint", () => {
+    // grid/list, preview, and the properties hero all mount ImageRenderables
+    // through the shared slot owner. The config path must update those live
+    // nodes before renderAll can decide whether the grid needs a rebuild.
+    const ctx = mkCtx();
+    const order: string[] = [];
+    const retheme = makeRetheme({
+      ...ctx,
+      syncThumbnailFit: () => order.push("thumbnail"),
+      renderAll: () => order.push("render"),
+    } as any);
+    const fresh = clone(defaultConfig);
+    fresh.ui.thumbnailFit = "crop";
+    retheme.applyConfig(fresh);
+    expect(ctx.config.ui.thumbnailFit).toBe("crop");
+    expect(order).toEqual(["thumbnail", "render"]);
   });
 
   test("theme flip is diffed against the LAST APPLIED state, not the caller's config (pinned regression)", () => {

@@ -251,6 +251,11 @@ export type TransparentBgMode = EnumValues<"transparentBg">;
 // (menus/dialogs), whose rasters flatten so an opaque island never blends the
 // desktop through.
 export type IconMode = EnumValues<"icons">;
+// global thumbnail fitting policy ([ui] thumbnail-fit): fit shows the whole
+// source without distortion, crop fills the area and cuts overflow, stretch
+// fills the area and distorts the source. It applies to every image/video
+// thumbnail surface (grid, list, preview, and the properties hero).
+export type ThumbnailFitMode = EnumValues<"thumbnailFit">;
 // what the block above the places sidebar shows. `tfm` = the original block
 // (accent ASCII wordmark + tagline); `files` = the same wordmark style spelling
 // "Files" in the sidebar white, no tagline; `none` = the block keeps its rows
@@ -301,6 +306,7 @@ export type UiConfig = {
   scrimMode: ScrimMode;
   scrimDim: number;
   icons: IconMode;
+  thumbnailFit: ThumbnailFitMode;
   iconStyle: IconStyle;
   ttyMode: TtyMode;
   forceGlyph: boolean;
@@ -1127,6 +1133,19 @@ const UI_ROWS = [
     doc: '"opaque" = icons flattened onto the tile bg (default); "transparent" = rasters keep alpha (may fringe on some terminals); "transparent-partial" = transparent except inside floating menus/dialogs',
     label: "icons",
     blurb: "How icons blend with tile backgrounds",
+    group: "appearance",
+    subsection: "look",
+  },
+  {
+    kind: "enum",
+    section: "ui",
+    tomlKey: "thumbnail-fit",
+    prop: "thumbnailFit",
+    values: ["fit", "crop", "stretch"],
+    def: "fit",
+    doc: '"fit" = preserve the source aspect ratio and show the whole thumbnail; "crop" = fill the area and crop overflow; "stretch" = fill the area and distort the source. Applies to grid, list, preview, and properties thumbnails.',
+    label: "thumbnail fit",
+    blurb: "Show whole thumbnails, crop them, or stretch them",
     group: "appearance",
     subsection: "look",
   },

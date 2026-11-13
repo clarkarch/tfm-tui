@@ -320,13 +320,13 @@ const renderInproc = (svg: string, pxW: number, pxH: number, bg?: string): Uint8
 // render as before, just centered on a canvas of the box's size.
 //
 // The fork's aspect-preserving placement is the fallback for a source whose
-// aspect still differs from the box (a vector thumbnail, whose
-// ImageRenderable is fit:"fit"): it letterboxes rather than stretches. The
-// icon lane does not need it — its canvas now matches the box exactly.
+// aspect still differs from the box: it letterboxes rather than stretches.
+// The icon lane does not need it — its canvas now matches the box exactly.
 //
-// The thumb lane does NOT use the exact canvas (its ImageRenderable is
-// fit:"cover", which crops the art to the box — a letterboxed thumb would
-// shrink inside its padding).
+// The thumb lane does NOT use the exact canvas: its source pixels must stay
+// policy-independent, and the mounted ImageRenderable owns the global
+// fit/crop/stretch policy. An exact canvas would bake one policy into the
+// pixels and make the other two unable to recover the source content.
 export type LetterboxPlan = {
   /** the rewritten SVG: a canvas-sized outer <svg> around the art viewport */
   svg: string;
@@ -382,8 +382,8 @@ export const planLetterboxedSvg = (
 };
 
 // The icon/brand lane renders into the EXACT box (see planLetterboxedSvg);
-// the thumb lane keeps the plain fit-inside render (cover-crop handles the
-// box there).
+// the thumb lane keeps the plain fit-inside render so the mounted image can
+// apply the global fit/crop/stretch policy without losing source content.
 const renderInprocExact = (svg: string, pxW: number, pxH: number, bg?: string): Uint8Array => {
   const R = loadInprocResvg();
   if (!R) throw new Error("resvg-js addon unavailable");
@@ -810,27 +810,29 @@ const spawnPng = (bin: string, args: string[], tool: string): Promise<Uint8Array
 // (the in-process resvg-js addon; magick is the addon-failure last resort —
 // and the photo/video paths' renderer anyway). In-process fit-inside
 // (dims <= target), same as the icon path.
-// magick's shared cover-crop tail: auto-orient, flatten onto bg, thumbnail
-// into the box with ^ (cover), then -extent to the exact box. Both lanes end
-// in it — the vector lane prefixes a `-density 192` (SVG rasterization), the
-// raster lane a `jpeg:size` decode hint — so the tail lives in one place.
-const magickCoverTail = (p: string, pxW: number, pxH: number, bg: string): string[] => [
+//
+// magick's shared fallback tail keeps the WHOLE source: auto-orient, flatten
+// onto bg, then thumbnail INSIDE the requested box. It deliberately does not
+// use `^` + `-extent` (the old cover-crop shape): baking a crop into the
+// pixels would make the global fit policy unable to recover the source edges
+// and the stretch policy unable to undo the distortion.
+export const magickFitTail = (p: string, pxW: number, pxH: number, bg: string): string[] => [
   p,
   "-auto-orient",
   "-background",
   bg,
+  "-alpha",
+  "remove",
+  "-alpha",
+  "off",
   "-thumbnail",
-  `${pxW}x${pxH}^`,
-  "-gravity",
-  "center",
-  "-extent",
   `${pxW}x${pxH}`,
   "png:-",
 ];
 const magickVectorArgs = (p: string, pxW: number, pxH: number, bg: string): string[] => [
   "-density",
   "192",
-  ...magickCoverTail(p, pxW, pxH, bg),
+  ...magickFitTail(p, pxW, pxH, bg),
 ];
 const renderVectorPng = (p: string, pxW: number, pxH: number, bg: string): Promise<Uint8Array> => {
   // Text-bearing SVGs render glyphless in-process (fonts-off, probed: the
@@ -844,12 +846,12 @@ const renderVectorPng = (p: string, pxW: number, pxH: number, bg: string): Promi
 // Raster stills go through Bun's built-in image pipeline (Bun >= 1.3.14): it
 // runs in-process on the work pool (no spawn) and already uses the JPEG IDCT
 // scale-down magick needed the `jpeg:size` hint for. Output is aspect-preserving
-// (fit:"inside", never letterboxed) — the tile's ImageRenderable uses
-// fit:"cover" to center-crop it into the cell box, replacing magick's
-// raster-time `-thumbnail ^` + `-extent` cover-crop. The 2x box mirrors the old
-// decode hint so the cover-crop downsamples.
-// Alpha: Bun.Image preserves the source alpha channel where magick's `-extent`
-// FLATTENED onto bg. Deliberate: flattening can't be done in-process, and the
+// (fit:"inside", never letterboxed) — the mounted ImageRenderable applies the
+// global fit/crop/stretch policy at draw time. The 2x box mirrors the old
+// decode hint so the draw-time crop downsamples.
+// Alpha: Bun.Image preserves the source alpha channel where magick's
+// `-alpha remove` FLATTENS onto bg. Deliberate: flattening can't be done
+// in-process, and the
 // flatten only changes genuinely translucent pixels (an opaque-alpha PNG like a
 // screenshot renders identically) — so we accept it and keep the perf win. The
 // magick fallback below still flattens, so exotic formats stay opaque.
@@ -965,7 +967,7 @@ const renderRasterPng = (p: string, pxW: number, pxH: number, bg: string): Promi
         // (~95 of ~108ms measured on 12MP); the hint is a no-op for PNG input.
         "-define",
         `jpeg:size=${pxW * 2}x${pxH * 2}`,
-        ...magickCoverTail(p, pxW, pxH, bg),
+        ...magickFitTail(p, pxW, pxH, bg),
       ],
       "magick",
     );
@@ -989,14 +991,18 @@ const renderRasterPng = (p: string, pxW: number, pxH: number, bg: string): Promi
 
 // video thumbs: one representative frame via the system ffmpeg
 // (src/fs/videobin — $TFM_FFMPEG override then PATH; nothing is bundled, and
-// a machine without ffmpeg keeps plain icons via canThumbVideo), cover-cropped
-// like the raster path so tiles keep a uniform look. Input-seek ~1s in to skip
-// the black lead-in (fast keyframe seek); clips shorter than that retry at 0.
+// a machine without ffmpeg keeps plain icons via canThumbVideo). The frame
+// preserves the source aspect ratio: the mounted ImageRenderable owns the
+// global fit/crop/stretch policy, so the producer must not bake in a crop.
+// Input-seek ~1s in to skip the black lead-in (fast keyframe seek); clips
+// shorter than that retry at 0.
 export const canThumbVideo = (): boolean => videoBin() !== null;
+export const videoThumbFilter = (pxW: number, pxH: number): string =>
+  `scale=${pxW}:${pxH}:force_original_aspect_ratio=decrease`;
 const renderVideoPng = async (p: string, pxW: number, pxH: number): Promise<Uint8Array> => {
   const vb = videoBin();
   if (!vb) throw new Error(`no video ffmpeg available: ${p}`);
-  const vf = `scale=${pxW}:${pxH}:force_original_aspect_ratio=increase,crop=${pxW}:${pxH}`;
+  const vf = videoThumbFilter(pxW, pxH);
   const attempt = (ss: string) =>
     spawnPng(
       vb.bin,
@@ -1074,10 +1080,13 @@ const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms
 // slightly from v1 full-decode thumbs, so old entries must regenerate.
 // v3: raster stills moved to Bun.Image (aspect-preserving, cover-cropped at
 // draw) — different pixels/dims from magick's v2 cover-crop, so regenerate.
+// v4: magick fallback and video frames now preserve the whole source instead
+// of baking a cover crop into their pixels. The global draw-time fit policy
+// needs those original edges, so old cropped disk entries must regenerate.
 // SVG thumbs carry the rasterizer identity in their key (see `mode` in thumbPng)
 // instead of a flat bump here, so changing the SVG renderer regenerates only
 // SVG thumbs and never re-rasterizes a whole photo library.
-const THUMB_DISK_VER = "v3";
+const THUMB_DISK_VER = "v4";
 const thumbDiskDir = (): string => path.join(process.env.XDG_CACHE_HOME ?? path.join(home, ".cache"), "tfm", "thumbs");
 const thumbDiskPath = (key: string): string =>
   path.join(
@@ -1130,8 +1139,8 @@ export const thumbPng = (
   // keys stay renderer-free so a photo library is never needlessly redone;
   // video keys carry the binary source instead (override↔PATH swaps must not
   // serve another binary's pixels — same argv, decoders may differ).
-  // Niche lanes carry their lane in the mode: in-process pixels (aspect-fit)
-  // differ from spawn pixels (exact cover box), so `raster:ico` etc. must not
+  // Niche lanes carry their lane in the mode: in-process pixels (2x aspect-fit)
+  // differ from spawn pixels (1x aspect-fit), so `raster:ico` etc. must not
   // serve magick-era `raster` entries. jpg/png/avif keep bare `raster` — their
   // paths are unchanged, no mass re-raster. (heic's two lanes share one mode:
   // installing/removing magick flips its lane under the same key — both are

@@ -968,7 +968,8 @@ describe("renderGrid (grid tiles)", () => {
 
     const job = thumbJobs.find((j) => j.path.endsWith("pic.png"));
     expect(job).toBeTruthy();
-    expect(job.wCells).toBe(Math.round(ASPECT * ICON_CELLS));
+    expect(job.wCells).toBe(TILE_W - 2); // the tile's real rectangular content area
+    expect(job.hCells).toBe(ICON_CELLS);
     expect(job.vector).toBe(false);
     // the job's slot is the tile's registered thumb slot (no icon spec)
     const ref = selection.tileRefs.get(path.join(tmp, "pic.png"))!;

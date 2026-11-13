@@ -8,7 +8,7 @@ import type { Entry } from "../fs/listing";
 import { makeSelection } from "../input/selection";
 import { makeGridBuilders, thumbPlanFor } from "./ui-grid-rows";
 import type { GridRendererCtx } from "./ui-grid-types";
-import { makeSlots } from "./ui-slots";
+import { makeSlots, type ThumbJob } from "./ui-slots";
 
 // The listings cache hands out stats that may LAG a live edit (an in-place
 // edit moves no dir mtime → the cache's signature cannot see it). The raster
@@ -28,6 +28,100 @@ describe("thumbPlanFor", () => {
       const fresh: Entry = { ...stale, statsState: "fresh" };
       expect(thumbPlanFor(fresh, f).stat?.size).toBe(500); // a fresh stat is reused
     } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// The grid thumbnail's fit target is the tile's REAL rectangular content
+// area. The old square physical-pixel icon box made `fit` contain the source
+// inside an invented 1:1 frame, so wide/portrait images looked tiny.
+describe("grid thumbnail target geometry", () => {
+  test("a thumbnail targets the tile's real rectangular content area", async () => {
+    const t = await createTestRenderer({ width: 60, height: 8 });
+    const dir = mkdtempSync(path.join(os.tmpdir(), "tfm-grid-thumb-geometry-"));
+    try {
+      const file = path.join(dir, "photo.png");
+      writeFileSync(file, "x");
+      const jobs: ThumbJob[] = [];
+      const colors = {
+        bg: "#1a1b26",
+        sidebarFg: "#c0caf5",
+        sidebarFgMuted: "#6f7086",
+        sidebarBg: "#1a1b26",
+        hoverBg: "#292e42",
+        white: "#ffffff",
+        accent: "#7aa2f7",
+        accentBg: "#33467c",
+      } as unknown as Theme;
+      const selection = makeSelection({
+        colors: () => colors,
+        byId: (id) => t.renderer.root.findDescendantById(id),
+        setText: () => {},
+        setIconState: () => true,
+        isCutKey: () => false,
+        scroller: () => null,
+        viewH: () => 8,
+        rowHInit: () => 2,
+        renderPreview: () => {},
+        paintTile: () => {},
+      });
+      const ctx: GridRendererCtx = {
+        termW: () => 60,
+        termH: () => 8,
+        scroller: () => null,
+        state: { cwd: dir, showHidden: false, sortBy: "name", sortAsc: true },
+        searchQuery: () => "",
+        recursiveSearch: () => false,
+        pathEditMode: () => false,
+        sw: () => 0,
+        tileW: () => 20,
+        tileH: () => 5,
+        iconCells: () => 2,
+        listRowH: () => 2,
+        uiStyle: () => "solid",
+        colors: () => colors,
+        previewEnabled: () => false,
+        previewWidth: () => 0,
+        viewMode: () => "grid",
+        wrapMode: () => "none",
+        reservedRight: () => 0,
+        cellMetrics: () => ({ cellW: 10, cellH: 20, aspect: 2 }),
+        makeIconSlot: () => {
+          throw new Error("an image tile must not build an icon slot");
+        },
+        pushThumbJob: (job) => jobs.push(job),
+        nextIconId: () => "grid-thumb-rect",
+        drainIconQueue: () => {},
+        drainThumbs: () => {},
+        stripSelectable: () => {},
+        fileAnim: () => null,
+        fileAnimVisibleOnly: () => false,
+        selection,
+        entryMouseHandlers: () => ({
+          onMouseDown: () => {},
+          onMouseUp: () => {},
+          onMouseDragEnd: () => {},
+          onMouseDrag: () => {},
+          onMouseDrop: () => {},
+        }),
+        isCutKey: () => false,
+        waitForResolution: async () => {},
+        clearRenameEdit: () => {},
+      };
+      const builders = makeGridBuilders(ctx);
+      const entry: Entry = { name: "photo.png", isDir: false, size: 1, mtimeMs: 1_700_000_000_000 };
+      t.renderer.root.add(builders.buildTile(2, entry, 0, true));
+      await t.renderOnce();
+
+      expect(jobs).toHaveLength(1);
+      expect(jobs[0]?.wCells).toBe(18); // tile width 20 minus the 1-cell inset on each side
+      expect(jobs[0]?.hCells).toBe(2); // the configured thumbnail height
+      const slot = t.renderer.root.findDescendantById(jobs[0]!.slotId) as any;
+      expect(slot.width).toBe(18);
+      expect(slot.height).toBe(2);
+    } finally {
+      await t.dispose();
       rmSync(dir, { recursive: true, force: true });
     }
   });
@@ -66,6 +160,7 @@ describe("list row icon/name alignment", () => {
         colors: () => colors,
         uiStyle: () => "solid",
         iconsMode: () => "opaque",
+        thumbnailFit: () => "fit",
         iconCells: () => rowHeight,
         glyphFor: () => "F",
         isTtyMode: () => false,

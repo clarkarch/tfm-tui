@@ -394,6 +394,7 @@ export const wireRetheme = (deps: {
     renderAll: nav.renderAll,
     clearFailedThumbs,
     resetIconQueue: core.slots.resetIconQueue,
+    syncThumbnailFit: core.slots.syncThumbnailFit,
     syncTerminalTheme: fileops.terminal.syncTerminalTheme,
     syncTerminalHeight: () => fileops.terminal.syncTerminalHeight(),
     repaintButtons: () => {

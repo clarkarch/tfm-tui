@@ -164,6 +164,10 @@ export const wireCore = (deps: {
     colors: themeGet,
     uiStyle: () => config.ui.uiStyle,
     iconsMode: () => config.ui.icons,
+    // global policy for every image/video thumbnail surface (grid, list,
+    // preview, and properties) — read live so a config change updates the
+    // mounted images without re-rastering their source pixels.
+    thumbnailFit: () => config.ui.thumbnailFit,
     // TTY-guarded like the terminal pane's own seam (no alpha on the Linux
     // console — without this a TTY+force run clears the X while its header
     // keeps its fill). The icon drain early-returns under TTY before ever
