@@ -1,4 +1,11 @@
+msrv = "1.99.1"
+
+max-fn-params-bools = 1
+max-struct-bools = 1
+
+allow-expect-in-consts = false
 allow-expect-in-tests = true
 allow-indexing-slicing-in-tests = true
 allow-panic-in-tests = true
+allow-unwrap-in-consts = false
 allow-unwrap-in-tests = true

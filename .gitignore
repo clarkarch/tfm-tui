@@ -1,4 +1,7 @@
 /target
 *.cast
 *.mp4
-AGENTS.md
+/AGENTS.local.md
+.*
+!.github/
+!.gitignore

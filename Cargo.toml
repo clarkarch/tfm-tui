@@ -28,12 +28,19 @@ cargo = "deny"
 
 # Correctness-focused restrictions. Legitimate exceptions must be narrow and explain why.
 allow_attributes_without_reason = "deny"
+arc_with_non_send_sync = { level = "deny", priority = -1 }
 as_conversions = "deny"
+await_holding_lock = { level = "deny", priority = -1 }
 dbg_macro = "deny"
 expect_used = "deny"
 fn_params_excessive_bools = "deny"
 indexing_slicing = "deny"
+mutex_atomic = "deny"
+option_option = "deny"
 panic = "deny"
+rc_buffer = "deny"
+rc_mutex = "deny"
+significant_drop_in_scrutinee = "deny"
 struct_excessive_bools = "deny"
 todo = "deny"
 unimplemented = "deny"
