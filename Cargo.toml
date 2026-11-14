@@ -10,7 +10,7 @@ publish = false
 # and only the source changes when the fork is swapped for upstream. The native
 # library comes with the repository: the fork commits it for Linux, so a build
 # needs no native toolchain and no download.
-opentui = { git = "https://github.com/clarkarch/opentui-fork", tag = "v0.8.4-fork.3" }
+opentui = { git = "https://github.com/clarkarch/opentui-fork", tag = "v0.8.4-fork.4" }
 
 [lints.rust]
 warnings = "deny"

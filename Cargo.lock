@@ -11,7 +11,7 @@ checksum = "65cd87c9a6d60536580b316ad985726104730a5151c99845f2490428ef91240a"
 [[package]]
 name = "opentui"
 version = "0.8.4"
-source = "git+https://github.com/clarkarch/opentui-fork?tag=v0.8.4-fork.3#f9c7e05b56c4aca72c4d1fe9685627848390e3f3"
+source = "git+https://github.com/clarkarch/opentui-fork?tag=v0.8.4-fork.4#70a69e81396dfd2e29c058f0062f79118bc8a669"
 dependencies = [
  "libc",
  "opentui-sys",
@@ -21,7 +21,7 @@ dependencies = [
 [[package]]
 name = "opentui-sys"
 version = "0.8.4"
-source = "git+https://github.com/clarkarch/opentui-fork?tag=v0.8.4-fork.3#f9c7e05b56c4aca72c4d1fe9685627848390e3f3"
+source = "git+https://github.com/clarkarch/opentui-fork?tag=v0.8.4-fork.4#70a69e81396dfd2e29c058f0062f79118bc8a669"
 
 [[package]]
 name = "tfm"
