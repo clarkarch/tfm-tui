@@ -1,0 +1,13 @@
+[package]
+name = "tfm"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[dependencies]
+# The fork's crates keep upstream's names, so the import specifier is `opentui`
+# and only the source changes when the fork is swapped for upstream. The native
+# library comes with the repository: the fork commits it for Linux, so a build
+# needs no native toolchain and no download.
+opentui = { git = "https://github.com/clarkarch/opentui-fork", tag = "v0.8.4-fork.3" }

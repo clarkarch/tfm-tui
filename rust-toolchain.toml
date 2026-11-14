@@ -1,0 +1,6 @@
+# The toolchain CI installs with `rustup toolchain install` here. It matches the fork's crates,
+# so a build here and a build there use the same compiler.
+[toolchain]
+channel = "1.99.1"
+profile = "minimal"
+components = ["rustfmt", "clippy"]

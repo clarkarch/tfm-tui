@@ -1,12 +1,4 @@
-node_modules/
-nautilus/
-opentui/
-kitty/
-.agents/
-dist/
-AGENTS.md
-skills-lock.json
-.kilo/
+/target
 *.cast
 *.mp4
-assets/logo-drafts/
+AGENTS.md
