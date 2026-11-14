@@ -1,6 +1,6 @@
 //! The port starts here.
 //!
-//! `tfm` is a terminal file manager, written in Rust on the OpenTUI fork. The fork's crates keep
+//! `tfm` is a terminal file manager, written in Rust on the `OpenTUI` fork. The fork's crates keep
 //! upstream's names, so the API is `opentui::…` and only the dependency's source says fork.
 
 use opentui::prelude::*;

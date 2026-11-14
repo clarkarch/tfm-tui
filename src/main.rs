@@ -2,7 +2,7 @@
 
 use opentui::prelude::*;
 
-fn main() -> opentui::Result<()> {
+fn main() -> Result<()> {
     let app = App::new(AppOptions::default())?;
     tfm::build(&app);
     app.run()

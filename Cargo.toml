@@ -11,3 +11,30 @@ publish = false
 # library comes with the repository: the fork commits it for Linux, so a build
 # needs no native toolchain and no download.
 opentui = { git = "https://github.com/clarkarch/opentui-fork", tag = "v0.8.4-fork.3" }
+
+[lints.rust]
+warnings = "deny"
+unsafe_code = "forbid"
+rust_2018_idioms = { level = "deny", priority = -1 }
+unused_qualifications = "deny"
+unreachable_pub = "deny"
+missing_debug_implementations = "deny"
+missing_docs = "deny"
+
+[lints.clippy]
+all = "deny"
+pedantic = "deny"
+cargo = "deny"
+
+# Correctness-focused restrictions. Legitimate exceptions must be narrow and explain why.
+allow_attributes_without_reason = "deny"
+as_conversions = "deny"
+dbg_macro = "deny"
+expect_used = "deny"
+fn_params_excessive_bools = "deny"
+indexing_slicing = "deny"
+panic = "deny"
+struct_excessive_bools = "deny"
+todo = "deny"
+unimplemented = "deny"
+unwrap_used = "deny"
